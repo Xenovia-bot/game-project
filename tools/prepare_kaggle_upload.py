@@ -39,17 +39,24 @@ def main():
     args = parser.parse_args()
 
     data_dir, out = Path(args.data_dir), Path(args.out)
-    missing = [n for n in NEEDED if not (data_dir / n).exists()]
+    # Zip'ler duz `datasets/` altinda da, kaynak bazli alt klasorlerde de
+    # (datasets/aerial-land/, datasets/milrec/, ...) durabilir; ozyinelemeli ara.
+    located = {}
+    for name in NEEDED:
+        matches = sorted(data_dir.rglob(name))
+        if matches:
+            located[name] = matches[0]
+    missing = [n for n in NEEDED if n not in located]
     if missing:
         raise SystemExit(
             "HATA: su dosyalar bulunamadi:\n  " + "\n  ".join(missing) +
-            f"\nAranan dizin: {data_dir}"
+            f"\nAranan dizin (ozyinelemeli): {data_dir}"
         )
 
     out.mkdir(parents=True, exist_ok=True)
     total = 0
     for name in NEEDED:
-        src, dst = data_dir / name, out / name
+        src, dst = located[name], out / name
         size = src.stat().st_size
         total += size
         if dst.exists() and dst.stat().st_size == size:

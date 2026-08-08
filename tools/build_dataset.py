@@ -464,6 +464,35 @@ def build_coco(records, split):
     }
 
 
+def apply_repeat_subsample(records, repeat, subsample):
+    """Yalnizca train bolumune seyreltme ve tekrar uygular.
+
+    Tekrar, ayni kaydi listeye birden fazla kez koyar; COCO ciktisinda ayni
+    goruntu farkli image_id'lerle tekrar gorunur ve YOLOX o goruntuyu epoch
+    basina o kadar kez ceker. Dengesizlik dugmesi budur (varsayilan kapali).
+    """
+    if subsample:
+        rng = random.Random(SPLIT_SEED)
+        kept = []
+        for r in records:
+            frac = subsample.get(r.source)
+            if r.split == "train" and frac is not None and rng.random() > frac:
+                continue
+            kept.append(r)
+        print(f"\nseyreltme sonrasi: {len(records)} -> {len(kept)} goruntu")
+        records = kept
+    if repeat:
+        extra = []
+        for r in records:
+            times = int(repeat.get(r.source, 1))
+            if r.split == "train" and times > 1:
+                extra.extend([r] * (times - 1))
+        if extra:
+            print(f"tekrar sonrasi: +{len(extra)} goruntu girisi")
+            records = records + extra
+    return records
+
+
 def parse_kv(values):
     out = {}
     for item in values or ():
@@ -510,10 +539,16 @@ def main():
                         help="zip/klasor kaynaklarinin bulundugu dizin")
     parser.add_argument("--out", default="datasets/merged",
                         help="cikti dizini (instances_train.json / instances_val.json)")
-    parser.add_argument("--repeat", nargs="*", default=[],
-                        help="or. vesselimg=2 (train'de tekrar sayisi)")
-    parser.add_argument("--subsample", nargs="*", default=[],
-                        help="or. visdrone=0.5 (train goruntulerinin orani)")
+    # action="append": bkz. --source. nargs="*" ile tekrarlanan bayraklar
+    # birbirini ezerdi ve yalnizca sonuncusu etkili olurdu.
+    parser.add_argument("--repeat", action="append", default=None,
+                        metavar="KAYNAK=SAYI",
+                        help="or. vesselimg=2 (train'de tekrar sayisi); "
+                             "birden fazla kez verilebilir")
+    parser.add_argument("--subsample", action="append", default=None,
+                        metavar="KAYNAK=ORAN",
+                        help="or. visdrone=0.5 (train goruntulerinin orani); "
+                             "birden fazla kez verilebilir")
     parser.add_argument("--dry-run", action="store_true",
                         help="dosya yazma, yalnizca dogrula ve raporla")
     parser.add_argument("--images-out", default=None,
@@ -566,7 +601,16 @@ def main():
                 if alt.exists():
                     path = alt
                 else:
-                    raise SystemExit(f"HATA: kaynak bulunamadi: {path}")
+                    # Zip'ler kaynak bazli alt klasorlerde de durabilir
+                    # (datasets/aerial-land/, datasets/milrec/, ...).
+                    found = sorted(data_dir.rglob(filename)) or \
+                        sorted(data_dir.rglob(Path(filename).stem))
+                    if not found:
+                        raise SystemExit(
+                            f"HATA: kaynak bulunamadi: {filename}\n"
+                            f"  Aranan dizin (ozyinelemeli): {data_dir}"
+                        )
+                    path = found[0]
         resolved[label] = path
 
     for label, filename, source, split in plan:
@@ -605,29 +649,14 @@ def main():
         records.extend(got)
 
     # --- tekrar / seyreltme (yalnizca train) ---
-    repeat = parse_kv(args.repeat)
-    subsample = parse_kv(args.subsample)
-    if subsample:
-        rng = random.Random(SPLIT_SEED)
-        kept = []
-        for r in records:
-            frac = subsample.get(r.source)
-            if r.split == "train" and frac is not None and rng.random() > frac:
-                continue
-            kept.append(r)
-        print(f"\nseyreltme sonrasi: {len(records)} -> {len(kept)} goruntu")
-        records = kept
-    if repeat:
-        extra = []
-        for r in records:
-            times = int(repeat.get(r.source, 1))
-            if r.split == "train" and times > 1:
-                extra.extend([r] * (times - 1))
-        if extra:
-            print(f"tekrar sonrasi: +{len(extra)} goruntu girisi")
-            records.extend(extra)
+    records = apply_repeat_subsample(
+        records, parse_kv(args.repeat), parse_kv(args.subsample)
+    )
 
-    problems = validate([r for r in records if True])
+    # --repeat ayni kaydi birden fazla kez listeye koyar; dogrulama kutu ve
+    # sizinti kapilarini benzersiz goruntuler uzerinde isletir, yoksa kasitli
+    # tekrarlar "yinelenen dosya adi" olarak raporlanirdi.
+    problems = validate(list({r.file_name: r for r in records}.values()))
     if problems:
         print("\n" + "!" * 74)
         print(f"DOGRULAMA BASARISIZ - {len(problems)} sorun")

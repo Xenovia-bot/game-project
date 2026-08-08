@@ -5,7 +5,7 @@
 # Kullanim: bash compile_kv260.sh [quant_dir] [out_dir] [model_adi] [sinif_sayisi]
 #
 # Cikti kanali = 4 (reg) + 1 (obj) + sinif_sayisi. Varsayilan 2 sinif
-# (person/vehicle) icin 7 kanal beklenir.
+# (land_vehicle/sea_vehicle) icin 7 kanal beklenir.
 set -euo pipefail
 
 QUANT_DIR=${1:-build/quant}

@@ -3,8 +3,11 @@ __pycache__/
 *.py[cod]
 .ipynb_checkpoints/
 
-# Yerel derleme ciktilari
-build/
+# Yerel derleme ciktilari. `build/` yerine `build/*`: git, dizinin kendisi
+# haric tutulunca icindeki dosyalari geri alamaz; not defterinin ureticisi
+# takipte kalmali (HANDOFF: notebook elle duzenlenmez).
+build/*
+!build/make_notebook.py
 *.o
 *.exe
 yolox_visdrone_demo

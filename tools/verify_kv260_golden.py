@@ -79,14 +79,27 @@ def deterministic_key(det):
 def decode_reference(dump_dir, meta):
     candidates = []
     num_levels = int(meta["num_levels"])
+    # Kanal sayisi sinif semasindan turetilir (reg 4 + obj 1 + sinif). Sabit
+    # bir sayi yazmak semayi degistirdigimizde bu testi sessizce kirardi.
+    num_classes = None
     for i in range(num_levels):
         h = int(meta[f"level{i}_h"])
         w = int(meta[f"level{i}_w"])
         c = int(meta[f"level{i}_c"])
         stride = int(meta[f"level{i}_stride"])
         scale = np.float32(meta[f"level{i}_scale"])
-        if c != 15:
-            raise ValueError("Beklenen cikti kanali 15, bulunan %d" % c)
+        if c < 6:
+            raise ValueError(
+                "Cikti kanali en az 6 olmali (reg 4 + obj 1 + >=1 sinif), "
+                "bulunan %d" % c
+            )
+        if num_classes is None:
+            num_classes = c - 5
+        elif c - 5 != num_classes:
+            raise ValueError(
+                "Seviyeler farkli sinif sayisi bildiriyor: %d != %d"
+                % (c - 5, num_classes)
+            )
 
         file_path = dump_dir / meta[f"level{i}_file"]
         raw = np.fromfile(file_path, dtype=np.int8)

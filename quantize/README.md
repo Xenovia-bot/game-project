@@ -41,30 +41,33 @@ Vitis-AI/
 └── yolox_visdrone/
     ├── quantize_yolox.py            # bu klasördeki dosya
     ├── compile_kv260.sh             # bu klasördeki dosya
-    ├── visdrone2coco.py             # projedeki tools/ klasöründen
     ├── best_ckpt.pth                # Kaggle artifacts.zip içinden
     ├── yolox_nano_visdrone.py       # Kaggle artifacts.zip içinden
     ├── visdrone_eval.py             # resmi DET tarzı AP@500 değerlendirici
     ├── YOLOX_COMMIT.txt             # iki ortamda aynı kaynak sürümü
-    └── datasets/visdrone_coco/
-        ├── annotations/instances_val.json   # 7. adımda üretilecek
-        ├── val_images/              # VisDrone2019-DET-val/images kopyası
-        └── train_images/            # isteğe bağlı: ~300 train görüntüsü (kalibrasyon)
+    └── datasets/merged/
+        ├── annotations/instances_val.json     # artifacts.zip içinden
+        ├── annotations/instances_train.json   # isteğe bağlı (kalibrasyon için)
+        └── images/<kaynak>/<ad>.jpg           # Kaggle'daki merged/images ağacı
 ```
 
-VisDrone **val** paketini (~70 MB) VM'e indirip açın:
+> **Anotasyon üretmeyin.** Veri seti Kaggle'da `build_dataset.py` ile bir kez
+> üretildi; `instances_val.json` artifacts paketinden gelir. VM'de yeniden
+> üretmek bölmeyi değiştirir ve float ↔ INT8 karşılaştırmasını geçersiz kılar.
 
-```bash
-cd ~/Vitis-AI/yolox_visdrone
-unzip VisDrone2019-DET-val.zip
-mkdir -p datasets/visdrone_coco
-cp -r VisDrone2019-DET-val/images datasets/visdrone_coco/val_images
-```
+Görüntüler: `quantize_yolox.py`, COCO `file_name` alanlarını doğrudan
+`images/` kökünün altında arar (`images/visdrone/xxx.jpg` gibi), bu yüzden
+ağacı **düzleştirmeyin**.
 
-Kalibrasyonun eğitim dağılımıyla yapılması tercih edilir: Kaggle'dan ~300 train
-görüntüsünü `datasets/visdrone_coco/train_images/` altına kopyalayabilirsiniz.
-Kopyalamazsanız script otomatik olarak val görüntüleriyle kalibre eder (kabul
-edilebilir bir yedek yoldur).
+Kalibrasyon kaynağı sırayla seçilir:
+
+1. `--calib-dir <klasör>` verilmişse o klasör (özyinelemeli),
+2. yoksa `annotations/instances_train.json` varsa **yalnızca train** görüntüleri,
+3. o da yoksa `images/` ağacının tamamı — bu durumda val görüntüleri de
+   kalibrasyona karışır ve script bunu uyarı olarak yazar.
+
+`instances_train.json` (~30 MB) Kaggle çıktısında `datasets/merged/annotations/`
+altındadır; 2. yolu kullanmak için onu da kopyalayın.
 
 ## 5. Docker'ı başlat
 
@@ -100,24 +103,26 @@ düşün:
 pip install --no-deps --no-build-isolation ./YOLOX
 ```
 
-## 7. `instances_val.json`'u üret
+## 7. Veriyi doğrula
 
-`--classes 2` **zorunlu**: Kaggle'da eğitim bu şemayla yapıldı. Eşleşmezse
-`quantize_yolox.py` kategori sayısı kapısında durur.
+Kuantalamaya girmeden önce dosyaların yerinde olduğunu görün — INT8 AP testi
+saatler sürer, yarısında dosya eksiği çıkması pahalıya patlar:
 
 ```bash
-python visdrone2coco.py --classes 2 \
-    --image-dir VisDrone2019-DET-val/images \
-    --anno-dir  VisDrone2019-DET-val/annotations \
-    --output    datasets/visdrone_coco/annotations/instances_val.json
+cd /workspace/yolox_visdrone
+test -f datasets/merged/annotations/instances_val.json
+python -c "import json;d=json.load(open('datasets/merged/annotations/instances_val.json'));print(len(d['images']),'goruntu',len(d['annotations']),'kutu',[c['name'] for c in d['categories']])"
 ```
+
+Beklenen çıktı: `4483 goruntu 21681 kutu ['land_vehicle', 'sea_vehicle']`.
+Sınıf adları farklı çıkarsa yanlış anotasyon dosyasıdır; devam etmeyin.
 
 ## 8. Kuantalama akışı
 
 Ortak argümanlar her komutta aynıdır:
 
 ```bash
-ARGS="--exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/visdrone_coco"
+ARGS="--exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/merged"
 ```
 
 1. (İsteğe bağlı) DPU uyumluluk raporu — tüm katmanların DPU'ya atandığını doğrular:
@@ -140,7 +145,8 @@ FLOAT_AP=BURAYA_AP500_DEGERINI_YAZIN
 python quantize_yolox.py --quant-mode calib --subset-len 300 $ARGS
 ```
 
-4. INT8 AP@500 ölçümü (548 val görüntüsü; CPU'da uzun sürebilir, sabır):
+4. INT8 AP@500 ölçümü (**4483 val görüntüsü**; CPU'da saatler sürer — `screen`
+   veya `nohup` altında başlatın, oturum kopunca ölçüm de kaybolur):
 
 ```bash
 python quantize_yolox.py --quant-mode test --float-map "$FLOAT_AP" $ARGS
@@ -195,8 +201,12 @@ Farklı bir şema kullanıyorsanız: `bash compile_kv260.sh build/quant build/co
   yapıldığından emin olun.
 - **Docker disk doldu** → VirtualBox sanal diskini genişletin;
   `docker system prune` ile eski imajları temizleyin.
-- **PTQ çok yavaş** → normaldir (CPU). `--subset-len` değerini 200'e düşürmek
-  kabul edilebilir.
+- **PTQ çok yavaş** → normaldir (CPU). Kalibrasyonda `--subset-len` değerini
+  200'e düşürmek kabul edilebilir. **INT8 AP testinde `--subset-len`
+  kullanılamaz**: accuracy gate tam val setiyle üretilmek zorundadır, script
+  alt küme verilirse durur.
+- **`kalibrasyon goruntusu bulunamadi`** → `images/` ağacını düzleştirmişsiniz
+  veya yanlış `--data-dir` vermişsiniz. Beklenen düzen 4. adımda.
 
 ## Çıktılar (bir sonraki aşamaya taşınacaklar)
 

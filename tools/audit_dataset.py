@@ -113,8 +113,20 @@ def audit(merged_dir, data_dir, sources):
                   f"{name}: goruntu kimlikleri benzersiz")
         rep.check(len({a["id"] for a in anns}) == len(anns),
                   f"{name}: anotasyon kimlikleri benzersiz")
-        rep.check(len({i["file_name"] for i in images}) == len(images),
-                  f"{name}: dosya adlari benzersiz")
+        # Tekrarlanan dosya adi tek basina hata degil: --repeat ayni goruntuyu
+        # bilerek birden fazla kez listeler. Hata, ayni adin FARKLI bir
+        # goruntuyu tanimlamasidir (kaynaklar arasi ad cakismasi).
+        by_name = defaultdict(set)
+        for image in images:
+            by_name[image["file_name"]].add((image["width"], image["height"]))
+        conflicting = [n for n, dims in by_name.items() if len(dims) > 1]
+        repeated = len(images) - len(by_name)
+        rep.check(not conflicting,
+                  f"{name}: ayni dosya adi hep ayni goruntu",
+                  f"cakisan ad: {len(conflicting)}")
+        rep.warn(repeated > 0,
+                 f"{name}: {repeated} tekrarlanmis goruntu girisi "
+                 "(--repeat kullanildiysa beklenir)")
         ids = {i["id"] for i in images}
         rep.check(all(a["image_id"] in ids for a in anns),
                   f"{name}: her kutu var olan bir goruntuye bagli")

@@ -1,4 +1,5 @@
-# Yerel makinede tools/visdrone2coco.py calistirmak icin minimum bagimliliklar.
+# Yerel makinede tools/ scriptlerini (build_dataset.py, audit_dataset.py,
+# verify_kv260_golden.py) calistirmak icin minimum bagimliliklar.
 # Egitim bagimliliklari Kaggle not defterinde, kuantalama bagimliliklari
 # Vitis AI docker imajinda kuruludur (bkz. README.md).
 Pillow>=10.0

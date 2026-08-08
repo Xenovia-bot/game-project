@@ -46,11 +46,12 @@ scp build/compiled/yolox_nano_visdrone.xmodel root@<KART_IP>:~/yolox_visdrone/
 scp test_video.mp4 root@<KART_IP>:~/yolox_visdrone/
 ```
 
-Test videosu notu: elinizde drone videosu yoksa VisDrone val görüntülerinden
-hızlıca bir video üretebilirsiniz (bilgisayarda, ffmpeg ile):
+Test videosu notu: elinizde drone videosu yoksa val görüntülerinden hızlıca bir
+video üretebilirsiniz (bilgisayarda, ffmpeg ile). Kaynağı tek bir alandan seçin
+— karışık kaynaklı bir slayt gösterisi takip katmanını anlamsız kılar:
 
 ```bash
-ffmpeg -framerate 2 -pattern_type glob -i 'val_images/*.jpg' \
+ffmpeg -framerate 2 -pattern_type glob -i 'datasets/merged/images/visdrone/*.jpg' \
        -vf "scale=1920:-2" -c:v mjpeg -q:v 5 test_video.avi
 ```
 
@@ -89,7 +90,7 @@ cd ~/yolox_visdrone
 Hızlı deneme için `--max-frames 100` ekleyebilirsiniz.
 Uygulama başlangıçta xmodel'in yalnızca bir DPU subgraph, bir NHWC giriş ve
 stride 8/16/32 olan üç çıkış içerdiğini doğrular. Çıkış kanal sayısı
-`5 + sınıf sayısı` olmalıdır; 2 sınıflı (person/vehicle) modelde **7**.
+`5 + sınıf sayısı` olmalıdır; 2 sınıflı (`land_vehicle`/`sea_vehicle`) modelde **7**.
 
 Varsayılan `--conf` **0.15**'tir: recall odaklı çalışma noktası. Yanlış
 pozitifleri takip katmanı elemek üzere tasarlanmıştır; takip henüz

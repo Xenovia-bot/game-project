@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""YOLOX-Nano (VisDrone) icin Vitis AI PTQ kuantalama ve xmodel export araci.
+"""Havadan arac YOLOX-Nano'su icin Vitis AI PTQ kuantalama ve xmodel export.
 
 Vitis AI 3.0 pytorch docker'i icinde calistirilir (conda env: vitis-ai-pytorch).
 
+Beklenen veri duzeni (`tools/build_dataset.py --images-out` ciktisi):
+
+    <data-dir>/annotations/instances_val.json
+    <data-dir>/annotations/instances_train.json   # istege bagli, kalibrasyon icin
+    <data-dir>/images/<kaynak>/<ad>.jpg           # COCO file_name ile birebir
+
 Ornek akis (docker icinde, /workspace altinda):
+  ARGS="--exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/merged"
+
   # 0) (istege bagli) DPU uyumluluk raporu
-  python quantize_yolox.py --inspect \
-      --exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/visdrone_coco
+  python quantize_yolox.py --inspect $ARGS
 
   # 1) float AP@500 dogrulama (Kaggle'daki degerle karsilastirin)
-  python quantize_yolox.py --quant-mode float \
-      --exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/visdrone_coco
+  python quantize_yolox.py --quant-mode float $ARGS
 
   # 2) kalibrasyon (PTQ)
-  python quantize_yolox.py --quant-mode calib --subset-len 300 \
-      --exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/visdrone_coco
+  python quantize_yolox.py --quant-mode calib --subset-len 300 $ARGS
 
-  # 3) INT8 AP@500 olcumu
-  python quantize_yolox.py --quant-mode test --float-map <FLOAT_AP500> \
-      --exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/visdrone_coco
+  # 3) INT8 AP@500 olcumu (tam val seti; accuracy gate burada uretilir)
+  python quantize_yolox.py --quant-mode test --float-map <FLOAT_AP500> $ARGS
 
   # 4) xmodel export (derleme girdisi)
-  python quantize_yolox.py --quant-mode test --deploy --subset-len 1 --batch-size 1 \
-      --exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/visdrone_coco
+  python quantize_yolox.py --quant-mode test --deploy --subset-len 1 --batch-size 1 $ARGS
 """
 
 import argparse
@@ -293,7 +296,7 @@ def evaluate(run_model, ann_file, img_dir, input_size, conf_thr, nms_thr,
         for x1, y1, x2, y2, score, cls in postprocess_frame(pred, conf_thr, nms_thr):
             results.append({
                 "image_id": img_id,
-                "category_id": int(cls) + 1,  # visdrone2coco id'leri 1..10
+                "category_id": int(cls) + 1,  # COCO kategori id'leri 1'den baslar
                 "bbox": [float(x1 / r), float(y1 / r),
                          float((x2 - x1) / r), float((y2 - y1) / r)],
                 "score": float(score),
@@ -322,15 +325,47 @@ def evaluate(run_model, ann_file, img_dir, input_size, conf_thr, nms_thr,
     return metrics["ap"]
 
 
-def calibrate(run_model, img_dir, input_size, subset_len, batch_size):
-    exts = ("*.jpg", "*.jpeg", "*.png")
-    paths = sorted(p for ext in exts for p in Path(img_dir).glob(ext))
+IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png")
+
+
+def collect_calib_paths(data_dir, images_dir, calib_dir=None):
+    """Kalibrasyon goruntulerini secer ve nereden geldigini yazdirir.
+
+    Birlestirilmis veri seti tek bir `images/<kaynak>/<ad>.jpg` agacinda durur;
+    train ve val ayrimi anotasyon dosyalarindadir. Bu yuzden train anotasyonu
+    varsa kalibrasyon **yalnizca train** goruntuleriyle yapilir; yoksa tum
+    agac kullanilir ve val'in de karistigi acikca uyarilir.
+    """
+    if calib_dir:
+        paths = sorted(p for ext in IMAGE_EXTS
+                       for p in Path(calib_dir).rglob(ext))
+        print("Kalibrasyon kaynagi: --calib-dir %s" % calib_dir)
+        return paths
+
+    train_ann = Path(data_dir) / "annotations" / "instances_train.json"
+    if train_ann.is_file():
+        names = [image["file_name"]
+                 for image in json.loads(train_ann.read_text())["images"]]
+        paths = [images_dir / name for name in names
+                 if (images_dir / name).is_file()]
+        print("Kalibrasyon kaynagi: %s (train bolumu, %d goruntu)"
+              % (train_ann, len(paths)))
+        return paths
+
+    paths = sorted(p for ext in IMAGE_EXTS for p in Path(images_dir).rglob(ext))
+    print("UYARI: instances_train.json yok; kalibrasyon %s agacinin tamamindan "
+          "yapiliyor (val goruntuleri de dahil)." % images_dir)
+    return paths
+
+
+def calibrate(run_model, paths, input_size, subset_len, batch_size):
     if not paths:
-        raise SystemExit("HATA: kalibrasyon goruntusu yok: %s" % img_dir)
+        raise SystemExit("HATA: kalibrasyon goruntusu bulunamadi")
     random.seed(42)
+    paths = sorted(paths)
     random.shuffle(paths)
     paths = paths[:subset_len]
-    print("Kalibrasyon: %d goruntu (%s)" % (len(paths), img_dir))
+    print("Kalibrasyon: %d goruntu" % len(paths))
 
     batch = []
     with torch.no_grad():
@@ -352,7 +387,9 @@ def parse_args():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exp-file", required=True, help="yolox_nano_visdrone.py yolu")
     p.add_argument("--ckpt", required=True, help="best_ckpt.pth yolu")
-    p.add_argument("--data-dir", required=True, help="datasets/visdrone_coco yolu")
+    p.add_argument("--data-dir", required=True,
+                   help="birlestirilmis veri seti koku: <yol>/annotations ve "
+                        "<yol>/images alt klasorlerini icerir")
     p.add_argument("--output", default="build/quant", help="cikti klasoru")
     p.add_argument("--quant-mode", default="calib", choices=["float", "calib", "test"])
     p.add_argument("--subset-len", type=int, default=None,
@@ -363,7 +400,9 @@ def parse_args():
     p.add_argument("--conf", type=float, default=0.001, help="AP icin esik")
     p.add_argument("--nms", type=float, default=0.65)
     p.add_argument("--calib-dir", default=None,
-                   help="kalibrasyon goruntu klasoru (varsayilan: train_images, yoksa val_images)")
+                   help="kalibrasyon goruntu klasoru (varsayilan: "
+                        "instances_train.json'daki train goruntuleri, "
+                        "o yoksa images/ agacinin tamami)")
     p.add_argument("--deploy", action="store_true", help="xmodel export et")
     p.add_argument("--fast-finetune", action="store_true",
                    help="AdaQuant ile gelismis kalibrasyon (yavas ama daha isabetli)")
@@ -402,20 +441,20 @@ def main():
 
     deploy_model = DeployModel(model).eval()
 
+    # Birlestirilmis veri seti duzeni (tools/build_dataset.py ciktisi):
+    #   <data-dir>/annotations/instances_val.json
+    #   <data-dir>/images/<kaynak>/<ad>.jpg      <- COCO file_name ile birebir
     data_dir = Path(args.data_dir)
     ann_val = data_dir / "annotations" / "instances_val.json"
-    val_dir = data_dir / "val_images"
+    val_dir = data_dir / "images"
     if not ann_val.is_file():
         raise SystemExit("HATA: val anotasyonu yok: %s" % ann_val)
     if not val_dir.is_dir():
-        raise SystemExit("HATA: val goruntu klasoru yok: %s" % val_dir)
-    if args.calib_dir:
-        calib_dir = Path(args.calib_dir)
-    else:
-        train_dir = data_dir / "train_images"
-        calib_dir = train_dir if train_dir.exists() else val_dir
-    if args.quant_mode == "calib" and not calib_dir.is_dir():
-        raise SystemExit("HATA: kalibrasyon klasoru yok: %s" % calib_dir)
+        raise SystemExit(
+            "HATA: goruntu klasoru yok: %s\n"
+            "  Beklenen duzen: <data-dir>/images/<kaynak>/<ad>.jpg "
+            "(build_dataset.py --images-out ciktisi)" % val_dir
+        )
 
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -467,7 +506,9 @@ def main():
     qmodel.eval()
 
     if args.quant_mode == "calib":
-        calibrate(qmodel, calib_dir, input_size, args.subset_len or 300, args.batch_size)
+        calib_paths = collect_calib_paths(data_dir, val_dir, args.calib_dir)
+        calibrate(qmodel, calib_paths, input_size,
+                  args.subset_len or 300, args.batch_size)
         if args.fast_finetune:
             print("fast_finetune (AdaQuant) calisiyor; CPU'da uzun surebilir...")
             quantizer.fast_finetune(

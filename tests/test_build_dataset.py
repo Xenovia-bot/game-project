@@ -23,6 +23,7 @@ from tools.build_dataset import (
     MILREC_MAP,
     VESSELIMG_MAP,
     VISDRONE_MAP,
+    apply_repeat_subsample,
     build_coco,
     clip_box,
     read_mendeley_yolo,
@@ -265,6 +266,57 @@ class ValidationTests(unittest.TestCase):
         rec = self._record(anns=[{"bbox": [1, 1, 5, 5], "category_id": 7,
                                   "iscrowd": 0, "ignore": 0}])
         self.assertTrue(any("gecersiz kategori" in p for p in validate([rec])))
+
+
+class RepeatSubsampleTests(unittest.TestCase):
+    """Dengesizlik dugmeleri kapali; ama acildiklarinda calismalari sart.
+
+    Tekrar ayni kaydi listeye birden fazla kez koyar. Dogrulama kapisi bunu
+    "yinelenen dosya adi" sayip cikarsa dugme hic kullanilamaz.
+    """
+
+    def _record(self, source, name, split="train"):
+        from tools.build_dataset import Record
+        rec = Record(source, "m", f"{source}/{name}", 100, 100, split,
+                     f"{source}:{name}")
+        rec.anns = [{"bbox": [10, 10, 20, 20], "category_id": LAND,
+                     "iscrowd": 0, "ignore": 0}]
+        return rec
+
+    def test_repeat_duplicates_train_records_only(self):
+        records = [self._record("sea", "a.jpg"),
+                   self._record("sea", "b.jpg", split="val"),
+                   self._record("land", "c.jpg")]
+        out = apply_repeat_subsample(records, {"sea": 3}, {})
+        names = [r.file_name for r in out]
+        self.assertEqual(names.count("sea/a.jpg"), 3, "train kaydi 3 kez olmali")
+        self.assertEqual(names.count("sea/b.jpg"), 1, "val kaydi tekrarlanmamali")
+        self.assertEqual(names.count("land/c.jpg"), 1, "diger kaynak etkilenmemeli")
+
+    def test_repeated_records_pass_validation(self):
+        records = apply_repeat_subsample([self._record("sea", "a.jpg")],
+                                         {"sea": 3}, {})
+        unique = list({r.file_name: r for r in records}.values())
+        self.assertEqual(validate(unique), [])
+
+    def test_repeated_records_reach_coco_output(self):
+        records = apply_repeat_subsample([self._record("sea", "a.jpg")],
+                                         {"sea": 3}, {})
+        coco = build_coco(records, "train")
+        self.assertEqual(len(coco["images"]), 3)
+        self.assertEqual(len({i["id"] for i in coco["images"]}), 3,
+                         "tekrarlanan girisler ayri image_id almali")
+        self.assertEqual(len(coco["annotations"]), 3)
+
+    def test_subsample_only_touches_train(self):
+        records = [self._record("visdrone", f"{i}.jpg") for i in range(50)]
+        records += [self._record("visdrone", f"v{i}.jpg", split="val")
+                    for i in range(20)]
+        out = apply_repeat_subsample(records, {}, {"visdrone": 0.5})
+        kept_val = sum(1 for r in out if r.split == "val")
+        kept_train = sum(1 for r in out if r.split == "train")
+        self.assertEqual(kept_val, 20, "val seyreltilmemeli")
+        self.assertLess(kept_train, 50)
 
 
 class CocoOutputTests(unittest.TestCase):

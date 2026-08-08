@@ -78,7 +78,7 @@ birleştirmek düşürür (kanguru türleri 0.968'e çıktı; domuz+keçi 0.897/
 | Sorun | Ayrıntı |
 | --- | --- |
 | 🔴 **`sea_vehicle` 17 sahneden** | 4.387 görüntü ama Valencia Limanı'nda yalnızca 17 kamera kurulumu. Model sahneyi ezberleyebilir. Val de aynı limandan 6 sahne. **Tek gerçek çözüm ikinci bir denizcilik kaynağı.** |
-| 🟡 Dengesizlik 22:1 | Müdahale edilmedi. `--repeat vesselimg=3` / `--subsample visdrone=0.5` düğmeleri hazır ama **kapalı** — önce ölçülecek |
+| 🟡 Dengesizlik 22:1 | Müdahale edilmedi. `--repeat vesselimg=3` / `--subsample visdrone=0.5` düğmeleri **kapalı**; 2026-08-09'da onarıldı ve testlendi (önceden `--repeat` doğrulama kapısını patlatıyordu) — önce ölçülecek |
 | 🟡 Dört farklı alan | VisDrone şehir / VESSELimg liman / milrec savaş / mendeley karışık. 0.9M model için zor |
 | 🟡 Mendeley içeriği | Makalede "sentetik veri artırma" geçiyor; oranı **doğrulanmadı** |
 | 🟡 Kaynak etiket kalitesi | Dönüşümün sadık olduğu kanıtlandı, **orijinal etiketlerin doğruluğu değil** |
@@ -147,9 +147,13 @@ deploy/src/tracker.hpp        IoU + ByteTrack 2 asamali eslestirme, sabit hiz.
                               VART/OpenCV BAGIMSIZ -> kart disinda test edilir
 deploy/tests/test_tracker.cpp 10 C++ testi
 
-tests/                        69 test. Calistirma:
+tests/                        75 test. Calistirma:
                               python -m unittest discover -s tests
 ```
+
+`build/make_notebook.py` **git'te takipli** (`.gitignore` icinde `build/*` +
+`!build/make_notebook.py` istisnasi). Onceden `build/` tumden yok sayiliyordu
+ve notebook'un tek ureticisi surum kontrolu disindaydi.
 
 **Notebook hücreleri:** 0 md · 1 kurulum · 2 YOLOX · **3-4-5 `%%writefile`**
 (build_dataset / visdrone_eval / exp — `_sync_notebook_embeds.py` doldurur) ·
@@ -195,13 +199,24 @@ Notebook'u **elle düzenlemeyin**: `python build/make_notebook.py` sonra
 **Kod**
 
 11. `argparse` `nargs="*"` ile **tekrarlanan bayraklar birbirini ezer** →
-    `action="append"`.
+    `action="append"`. (`--source`, `--repeat`, `--subsample` üçü de düzeltildi.)
 12. VisDrone train ve val **aynı kaynak adını paylaşır ama farklı zip'lerdedir**
     — arşivi kaynak adına göre eşlemek val görüntülerini train zip'inde aratır.
 13. Yol eşleştirmesi `"/images/" in name` ile yapılmamalı; arşiv kökü bir
     seviye aşağıdaysa kaçırır → `has_part()` bileşen bazlı eşler.
 14. Kaynak yollarında boşluk var → notebook `build_dataset.py`'yi **kabuk
     dizesiyle değil `subprocess` argüman listesiyle** çağırır.
+15. **Sınıf sayısına bağlı sabitler koda gömülmemeli.** Taksonomi 10→2
+    olunca `verify_kv260_golden.py` içindeki `c != 15` kontrolü doğru bir
+    kart dökümünü reddeder hale gelmişti; artık kanal sayısı dökümden
+    türetiliyor. Aynı hata sınıfı: `compile_kv260.sh`, `main.cpp`.
+16. **Evaluator, Exp'in alanlarını görmez.** `VisDroneEvaluator` içinde
+    `self.deploy_conf` kullanılıyordu ama alan `Exp`'te tanımlıydı;
+    `COCOEvaluator.__init__` böyle bir alan set etmiyor (sabitlenmiş
+    commit'ten doğrulandı) → ilk değerlendirmede `AttributeError`. Artık
+    `get_evaluator` açıkça geçiriyor.
+17. **CSV başlığı ile satırları elle senkron tutmayın.** `centers.csv`
+    başlığında `track_id` eksikti; sütunlar bir kayıyordu.
 
 ## 8. Kritik teknik sabitler
 
@@ -230,7 +245,10 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
    train-val farkı büyükse 17 sahneye aşırı uyum var demektir.
 4. Hücre 13 → `yolox_aerial_artifacts.zip` indir.
 5. **VM**: `quantize/README.md`. `--inspect` ile kare olmayan girdinin tek DPU
-   subgraph'ine derlendiğini doğrula. VM'e val görüntüleri de lazım.
+   subgraph'ine derlendiğini doğrula. VM'e `datasets/merged/images` ağacı ve
+   `instances_val.json` lazım (kalibrasyonu train'den yapmak için
+   `instances_train.json` da). **Açık soru:** INT8 kabul testi 4.483 görüntü
+   üzerinde CPU'da saatler sürer ve `--subset-len` bilerek yasak.
 6. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
 7. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı.
 8. **Rapor**: `docs/report_template.md`.
@@ -254,9 +272,10 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 ## 11. Doğrulama komutları
 
 ```bash
-python -m unittest discover -s tests          # 69 test (g++ varsa C++ dahil)
+python -m unittest discover -s tests          # 75 test (g++ varsa C++ dahil)
 python tools/audit_dataset.py --merged datasets/merged --data-dir datasets
 python tools/_sync_notebook_embeds.py         # notebook hucrelerini esitle
+python tools/build_dataset.py --dry-run       # sayilar: 19476/205340, 4483/21681
 ```
 
 Windows'ta `g++` PATH'te değilse C++ tracker testi atlanır:

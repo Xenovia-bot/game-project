@@ -1,16 +1,20 @@
-# Proje Raporu: KV260 Üzerinde YOLOX-Nano ile İnsan/Taşıt Tespiti, Takip ve Merkez Noktası Çıkarımı
+# Proje Raporu: KV260 Üzerinde YOLOX-Nano ile Havadan Araç Tespiti, Takip ve Merkez Noktası Çıkarımı
 
 > Bu şablondaki `...` alanlarını kendi ölçümlerinizle doldurun.
 > Ölçümün nereden alınacağı her bölümde belirtilmiştir.
 
 ## 1. Özet
 
-VisDrone2019-DET veri setiyle fine-tune edilen DPU-uyumlu YOLOX-Nano modeli,
-Vitis AI 3.0 zinciriyle INT8'e kuantalanarak Kria KV260 üzerindeki DPUCZDX8G
-(B4096) hızlandırıcısında çalıştırılmıştır. Uygulama video karelerinde
-**insan ve taşıt** tespit eder, tespitleri kareler arasında takip eder ve her
-nesnenin merkez noktasını (cx = (x1+x2)/2, cy = (y1+y2)/2) hesaplayıp
-görüntüye çizer ve CSV'ye loglar.
+Dört havadan-görüntü kaynağından (VisDrone2019-DET, VESSELimg, Military
+Vehicle Recognition, Mendeley UAV Military) birleştirilen 2 sınıflı bir setle
+fine-tune edilen DPU-uyumlu YOLOX-Nano modeli, Vitis AI 3.0 zinciriyle INT8'e
+kuantalanarak Kria KV260 üzerindeki DPUCZDX8G (B4096) hızlandırıcısında
+çalıştırılmıştır. Uygulama video karelerinde **kara ve deniz aracı** tespit
+eder, tespitleri kareler arasında takip eder ve her nesnenin merkez noktasını
+(cx = (x1+x2)/2, cy = (y1+y2)/2) hesaplayıp görüntüye çizer ve CSV'ye loglar.
+
+Veri seti: **19.476 train / 4.483 val görüntü**, 205.340 / 21.681 kutu
+(`tools/build_dataset.py`, oturum bazlı bölme).
 
 ## 2. Sistem yapılandırması
 
@@ -21,7 +25,7 @@ görüntüye çizer ve CSV'ye loglar.
 | Model | YOLOX-Nano (depth 0.33, width 0.25, depthwise) |
 | DPU uyarlamaları | SiLU→ReLU, Focus→DPUFocus (sabit conv ile space-to-depth) |
 | Giriş boyutu | 896×512 (16:9, letterbox, 114 dolgu) |
-| Sınıflar | 2: `person`, `vehicle` |
+| Sınıflar | 2: `land_vehicle`, `sea_vehicle` |
 | Eğitim | Kaggle GPU (`...` epoch, batch `...`, init: Megvii COCO) |
 | YOLOX kaynak sürümü | `6ddff4824372906469a7fae2dc3206c7aa4bbaee` |
 | Kuantalama | Vitis AI 3.0 PTQ, `...` kalibrasyon görüntüsü |
@@ -32,7 +36,7 @@ görüntüye çizer ve CSV'ye loglar.
 | Karar | Gerekçe |
 | --- | --- |
 | Girdi 896×512 (640×640 yerine) | 1920×1080 → 640×640 letterbox'ta kanvasın %44'ü gri dolgu; etkin ölçek 0.333. 896×512'de 0.467 — %40 daha yüksek çözünürlük, %12 daha fazla hesap |
-| 2 sınıf | Görsel olarak benzer kara taşıtlarını birleştirmek AP'yi artırır; sistem hedefi zaten insan/taşıt merkezleri |
+| 2 sınıf | Görsel olarak benzer araçları birleştirmek AP'yi artırır, farklı olanları birleştirmek düşürür ([arXiv 2407.00018](https://arxiv.org/abs/2407.00018)); car/van/truck/bus/tank → `land_vehicle`, container/tanker/ro-ro/tugboat → `sea_vehicle` |
 | 40 epoch | Referans çalıştırmada model epoch ~40'ta doydu (45→80 arası AP@0.50 yalnızca +0.006) |
 | Düşük güven eşiği + takip | Recall odaklı: bir iz 3 kare görülmeden raporlanmaz, bu yüzden eşik 0.15'e indirilebilir |
 
@@ -52,8 +56,12 @@ Sınıf bazlı (float):
 
 | Sınıf | AP | AP50 | F1 |
 | --- | --- | --- | --- |
-| person | ... | ... | ... |
-| vehicle | ... | ... | ... |
+| land_vehicle | ... | ... | ... |
+| sea_vehicle | ... | ... | ... |
+
+> `sea_vehicle` için train ↔ val farkı büyükse bu, VESSELimg'in yalnızca 17
+> kamera kurulumundan gelmesinin sonucudur (bkz. bölüm 8). Raporda bu sınırı
+> açıkça yazın.
 
 **Kuantalama sadakati**: INT8 modeli float modelin AP'sinin `...` %'sini
 korumuştur. Kabul kapısı: mutlak AP kaybı ≤ 0.02.
@@ -117,10 +125,14 @@ Aynı donanımda ölçülen doğruluk/hız takası:
 | Yapılandırma | AP50 | F1 | KV260 FPS |
 | --- | --- | --- | --- |
 | Nano 896×512, tam kare | ... | ... | ... |
-| Nano 640×640, tam kare (referans, 10 sınıf) | 0.2205 | ... | ... |
-| Nano 896×512 + 2×2 tiling | ... | ... | ... |
+| Nano 640×640, tam kare (referans, 10 sınıf, farklı veri) | 0.2205 | ... | ... |
 
-Tiling ölçümü: `training/eval_tiled.py`.
+> Referans satırı **10 sınıflı, yalnızca VisDrone** bir çalıştırmadan gelir;
+> doğrudan karşılaştırılabilir değildir, yalnızca bağlam içindir.
+
+Tiling bu akışta ölçülmemiştir (2×2 tiling ~%67 küçük nesne kazancı için 5 kat
+hesap ister; 30 FPS bütçesine sığmaz). Ölçmek isterseniz FPS bütçesi
+belirlendikten sonra ayrı bir çalışma olarak ele alın.
 
 ## 8. Karşılaşılan sorunlar ve çözümler
 

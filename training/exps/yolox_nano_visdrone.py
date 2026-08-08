@@ -106,6 +106,12 @@ class VisDroneTrainingDataset(COCODataset):
 class VisDroneEvaluator(COCOEvaluator):
     """Resmi DET toolkit eslestirme/VOC AP mantigiyla VisDrone AP@500."""
 
+    def __init__(self, *args, deploy_conf=0.15, **kwargs):
+        # COCOEvaluator dagitim esigini bilmez; F1 tablosunun kartla ayni
+        # esikte raporlanmasi icin acikca gecilir.
+        super().__init__(*args, **kwargs)
+        self.deploy_conf = deploy_conf
+
     def evaluate_prediction(self, data_dict, statistics):
         if not is_main_process():
             return 0, 0, None
@@ -346,4 +352,5 @@ class Exp(MyExp):
             nmsthre=self.nmsthre,
             num_classes=self.num_classes,
             testdev=testdev,
+            deploy_conf=self.deploy_conf,
         )

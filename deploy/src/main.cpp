@@ -308,7 +308,7 @@ int main(int argc, char* argv[]) {
     std::cerr << "HATA: CSV dosyasi acilamadi: " << csv_path << "\n";
     return 1;
   }
-  csv << "frame,class_id,class_name,score,cx,cy\n";
+  csv << "frame,track_id,class_id,class_name,score,cx,cy\n";
   csv << std::fixed << std::setprecision(2);
 
   // ---------------- kare dongusu ----------------
