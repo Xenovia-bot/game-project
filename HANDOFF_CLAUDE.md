@@ -77,10 +77,12 @@ birleştirmek düşürür (kanguru türleri 0.968'e çıktı; domuz+keçi 0.897/
 
 | Sorun | Ayrıntı |
 | --- | --- |
-| 🔴 **`sea_vehicle` 17 sahneden** | 4.387 görüntü ama Valencia Limanı'nda yalnızca 17 kamera kurulumu. Model sahneyi ezberleyebilir. Val de aynı limandan 6 sahne. **Tek gerçek çözüm ikinci bir denizcilik kaynağı.** |
+| 🔴 **`sea_vehicle` tek kameradan** | **2026-08-09'da ölçüldü.** "23 oturum" aslında **3 çekim günü** (2023-06-27, 10-13, 10-18), hepsi Valencia Limanı'nda **tek kamera kurulumundan**. Val de aynı kameranın aynı günlerinden. **Sızıntı YOK** — kontrol edildi: val karelerinin yalnızca %1,2'sinin train'de RMS<10/255 yakın komşusu var, oturum bazlı bölme işini yapmış. Sorun sızıntı değil: val skoru "deniz aracı tanıyor mu"yu değil **"bu limanı ezberledi mi"**yi ölçüyor. `sea_vehicle` AP'sini rapora **bu uyarıyla** yazın. Tek gerçek çözüm ikinci bir denizcilik kaynağı. |
 | 🟡 Dengesizlik 22:1 | Müdahale edilmedi. `--repeat vesselimg=3` / `--subsample visdrone=0.5` düğmeleri **kapalı**; 2026-08-09'da onarıldı ve testlendi (önceden `--repeat` doğrulama kapısını patlatıyordu) — önce ölçülecek |
 | 🟡 Dört farklı alan | VisDrone şehir / VESSELimg liman / milrec savaş / mendeley karışık. 0.9M model için zor |
-| 🟡 Mendeley içeriği | Makalede "sentetik veri artırma" geçiyor; oranı **doğrulanmadı** |
+| 🔴 **Mendeley'in çoğu konu dışı** | **2026-08-09'da ölçüldü ve gözle doğrulandı.** 7.985 görüntünün yalnızca **1.799'u (%23)** gerçek zaman damgalı drone çekimi; %62'si boş. İçinde **112 Fortnite ekran görüntüsü** (gri tonlamaya çevrilmiş, 179 "tank" kutusu var), **masa üstünde plastik oyuncak tank fotoğrafları**, getty/istock stok fotoğrafları, YouTube küçük resimleri var. Görüntülerin %33'ü mendeley'den ama kutuların yalnızca **%3'ü**. Temizlik dosya adı kalıbıyla yapılabilir (`Fortnite`, `gettyimages`, `istockphoto`, `maxresdefault`, `screenshot`, `VID_`, `IMG_`, salt-numara). |
+| 🔴 **İki sınıf hiç birlikte görünmüyor** | Her iki sınıfı birden içeren görüntü: **train 0, val 0**. Model "su → sea, şehir → land" sahne kısayolunu öğrenebilir; kıyı şeridi üzerinden uçan gerçek videoda bu kırılır. Kartta ilk bakılacak şeylerden biri. |
+| 🟡 İki ayrı boyut rejimi | 896×512'ye ölçekten sonra medyan kutu: visdrone **18 px** (%44'ü <16 px), mendeley 52, milrec 64, vesselimg 68 px. `sea` kolay, `land` zor görünecek — sınıf AP farkı semantikten değil çözünürlükten gelebilir. |
 | 🟡 Kaynak etiket kalitesi | Dönüşümün sadık olduğu kanıtlandı, **orijinal etiketlerin doğruluğu değil** |
 | 🟡 Boş kare oranı | train %24, val %36 (tipik %10). Mendeley kaynaklı — asker/insan atılınca kare boşalıyor |
 
@@ -241,8 +243,16 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
    Internet aç → **hücre 1-6 çalıştır, dur**. Hücre 6 şunu basmalı:
    `train 19476 / 205340`, `val 4483 / 21681`. Tutmazsa çıktıyı incele.
 2. Hücre 7 → 9 ile **eğitim** (~1,5-2 saat, 40 epoch).
-3. Hücre 11 değerlendirme → **sınıf bazlı AP'ye bak**. `sea_vehicle` için
-   train-val farkı büyükse 17 sahneye aşırı uyum var demektir.
+3. Hücre 11 değerlendirme → **sınıf bazlı AP'ye bak**. Beklenti ve okuma
+   kılavuzu (bkz. §4):
+   - `sea_vehicle` AP yüksek çıkacak — bu **iyi haber değil**, tek limanın
+     ezberlenmesi de aynı sonucu verir. Rapora uyarıyla yazın.
+   - `land_vehicle` AP düşük çıkacak — kutuların %96'sı VisDrone'dan ve
+     medyan 18 px. Asıl sinyal budur.
+   - İkisinin farkı büyükse önce **çözünürlük/nesne boyutu** açıklamasını
+     düşünün, sınıf semantiğini değil.
+   Bu koşu **taban çizgisidir**: mendeley temizliğinin (§4) fayda edip
+   etmediği ancak buna karşı ölçülerek anlaşılır.
 4. Hücre 13 → `yolox_aerial_artifacts.zip` indir.
 5. **VM**: `quantize/README.md`. `--inspect` ile kare olmayan girdinin tek DPU
    subgraph'ine derlendiğini doğrula. VM'e `datasets/merged/images` ağacı ve
