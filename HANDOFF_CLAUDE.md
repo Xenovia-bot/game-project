@@ -43,27 +43,29 @@ Kod ve `README.md` planın üstündedir.
 
 ## 0. KILITLENMIS HEDEF (2026-08-08)
 
-Sistem **tek sinif** tespit edecek ve her tespitin merkez noktasini uretecek:
+Sistem **iki sinif** tespit edecek ve her tespitin merkez noktasini uretecek:
 
 | Sinif | Kapsam |
 | --- | --- |
-| `ship` | denizde hareket eden gemi / deniz araci |
+| `land_vehicle` | VisDrone car/van/truck/bus + askeri tank/ZPT |
+| `sea_vehicle` | container, chemical tanker, Ro-Ro, tugboat |
 
-Insan, kara araci, hava araci **kapsam disi**. VisDrone artik ana veri
-kaynagi degil (deniz araci icermiyor); COCO baslangic checkpoint'i `boat`
-sinifini zaten gordugu icin dogrudan COCO -> denizcilik fine-tune yolu
-izlenecek.
+Insan ve hava araci **kapsam disi** (atilir, arka plan olur).
+Veri `tools/build_dataset.py` ile dort kaynaktan birlestirilir:
+train 19.476 goruntu / 205.340 kutu, val 4.483 / 21.681.
 
-### Bu kapsam neden onceki hedeflerden kolay
+### Sinif kararlarinin olcutu
 
-- Tek sinif: sinif karisikligi ve makro ortalamada cop sinif yok
-- Buyuk nesne: VisDrone yayasi 896x512'de 5-14 px iken gemi 90-460 px
-- Tekduze su arka plani, yuksek kontrast
-- Kare basina az nesne: takip neredeyse kusursuz, NMS ucuz
+[arXiv 2407.00018](https://arxiv.org/abs/2407.00018): **gorsel olarak benzer**
+siniflari birlestirmek mAP'yi yukseltir, **farkli** olanlari birlestirmek
+dusurur (kanguru turleri 0.968'e cikti; domuz+keci 0.897/0.781 -> 0.699).
 
-Kullanicinin "100 nesnenin 80'i" hedefi bu kapsamda gercekci.
-Girdi cozunurlugu muhtemelen 896x512'den kucultulebilir (or. 640x384) ve
-bu dogrudan FPS kazanci demektir - karar kutu boyut dagilimi olculunce.
+Buna gore havadan bakista:
+- car/van/truck/bus/tank -> hepsi zeminde dikdortgen govde -> birlestirildi
+- container/tanker/ro-ro/tugboat -> hepsi sudaki govde -> birlestirildi
+- bisiklet/motosiklet (ince siluet), insan, hava araci -> **atildi**
+- Buoy -> atildi ama **kasten**: yukaridan tekneye benzer, hard negative
+- Pilot (kilavuz botu, medyan 15 px) -> **ignore**: deniz araci ama cok kucuk
 
 Kisitlar:
 
@@ -71,12 +73,10 @@ Kisitlar:
   Uydu goruntusu (xView, DOTA, DIOR, HRSC) **kullanilmayacak**: 0.3 m GSD'de
   7 m'lik bir tank ~23 piksele duser ve kacindigimiz kucuk-nesne problemine
   geri donulur.
-- **Hedef disi siniflar ignore olarak isaretlenecek.** Denizcilik veri
-  setlerinde `swimmer`, `buoy`, `life-saving appliance`, `jet-ski` gibi
-  etiketler var. Bunlar tespit edilmeyecek ama etiketsiz de birakilmayacak:
-  etiketsiz kalirlarsa model onlari arka plan olarak ogrenir. Ozellikle
-  samandira ve jet-ski gemiye benzeyebilecegi icin bunlari ignore yapmak
-  hem yanlis pozitifi hem yanlis negatifi onler.
+- **Hedef disi siniflar iki turlu ele alinir.** Gorsel olarak farkli ve
+  hedef olmayan siniflar (insan, hava araci, bisiklet) **atilir** -> arka plan
+  olurlar, bu istenen davranistir. Hedefe benzeyen ama kapsam disi olanlar
+  (Pilot botu) **ignore** isaretlenir: ne tespit beklenir ne arka plan sayilir.
 
 ### Terminoloji tuzagi (iki kez yasandi)
 
@@ -110,7 +110,7 @@ Kaggle'da 10 sınıf / 640×640 / 80 epoch eğitimi bitti:
 Kullanıcının hedefi **yalnızca insan ve taşıtın merkez noktası**, ≥30 FPS,
 iz bazında yüksek recall. Buna göre:
 
-- `visdrone2coco.py --classes 2` → `person` / `vehicle` şeması
+- `tools/build_dataset.py` → dört kaynaktan `land_vehicle` / `sea_vehicle`
 - `input_size = (512, 896)`, `random_size = (14, 18)`
 - `max_epoch = 40`, `no_aug_epochs = 10`
 - Dağıtım eşiği `0.30` → `0.15` (recall odaklı; takip temizliyor)
@@ -134,12 +134,10 @@ Golden dump takipten **önceki** ham tespitleri yazar; eşdeğerlik testi etkile
 ### Eklenen ölçüm altyapısı
 
 - P/R/F1 (en iyi nokta + dağıtım eşiği), sınıf bazlı AP
-- Sınıf gruplama senaryoları (`GROUP_2`, `GROUP_3`, tek sınıf) — bir modeli
-  farklı sınıf tanımlarıyla yeniden eğitmeden ölçmek için
-- `tools/tiling.py` + `training/eval_tiled.py` — dilimlenmiş çıkarım.
-  **Spekülatif**: 16:9 girdi kararı sonrası muhtemelen gerekmeyecek, yedek plan
+- Sınıf gruplama senaryoları (`GROUP_2`, `GROUP_3`) — bir modeli farklı sınıf
+  tanımlarıyla yeniden eğitmeden ölçmek için
 
-- Yerel doğrulama: `python -m unittest discover -s tests -v` → **39/39 OK**
+- Yerel doğrulama: `python -m unittest discover -s tests -v` → **53/53 OK**
   (g++ PATH'te ise C++ tracker testleri dahil).
 - Notebook `%%writefile` hücreleri kaynakla senkron: `python tools/_sync_notebook_embeds.py`
 
@@ -147,8 +145,8 @@ Golden dump takipten **önceki** ham tespitleri yazar; eşdeğerlik testi etkile
 
 1. `training/kaggle_visdrone_yolox.ipynb` → Kaggle'da sıfırdan çalıştır
    (2 sınıf, 896×512, 40 epoch — ~1,5-2 saat)
-2. Yeni `yolox_visdrone_artifacts.zip` indir
-3. Eski 10 sınıflı COCO JSON / checkpoint / xmodel **kullanma**
+2. Yeni `yolox_aerial_artifacts.zip` indir
+3. Eski şemalı COCO JSON / checkpoint / xmodel **kullanma**
 4. VM: `quantize/README.md` — `--inspect` ile **kare olmayan girdinin** tek DPU
    subgraph'ine derlendiğini doğrula
 5. Kart: `deploy/README.md` + golden test, **gerçek FPS'i ölç**
@@ -156,8 +154,6 @@ Golden dump takipten **önceki** ham tespitleri yazar; eşdeğerlik testi etkile
 
 ### Henüz yapılmayanlar / bilinen sınırlar
 
-- `training/eval_tiled.py` torch gerektirdiği için **yerelde çalıştırılamadı**;
-  ilk gerçek koşusu Kaggle'da olacak.
 - `main.cpp` VART/OpenCV gerektirdiği için yerelde **derlenemedi**; takip
   entegrasyonu gözle incelendi, ilk gerçek derleme kartta/SDK'da olacak.
 - Golden test yalnızca ilk karenin ham tespitlerini karşılaştırır; **takip
@@ -166,10 +162,11 @@ Golden dump takipten **önceki** ham tespitleri yazar; eşdeğerlik testi etkile
 - **İz bazında recall ölçülmedi.** Bunun için iz kimlikli video veri seti
   (VisDrone-VID / MOT) gerekir. Kullanıcının "100 nesnenin 80'i" hedefi
   kare bazında değil, bu metrikle ölçülmelidir.
-- VisDrone'da **gemi/uçak/tank yok**. Gerekirse DIOR ikinci aşama olarak
-  eklenebilir; ancak görsel olarak çok farklı sınıfları `vehicle` içine
-  katmak zarar verir ([arXiv 2407.00018](https://arxiv.org/abs/2407.00018):
-  benzer sınıfları birleştir, farklı olanları ayrı tut).
+- **Sınıf dengesizliği** train'de 22:1 (land:sea), val'de 6:1. Müdahale
+  edilmedi; `--repeat` / `--subsample` düğmeleri hazır ama kapalı. Sınıf bazlı
+  AP ölçülünce karar verilecek.
+- **VESSELimg çeşitliliği düşük**: 6.092 görüntü ama yalnızca 23 sahne, hepsi
+  Valencia Limanı. Model o limana aşırı uyum sağlayabilir; rapora yazılmalı.
 
 ## 4. Kritik teknik sabitler
 

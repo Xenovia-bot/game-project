@@ -8,16 +8,14 @@ ROOT = Path(__file__).resolve().parents[1]
 NB_PATH = ROOT / "training" / "kaggle_visdrone_yolox.ipynb"
 
 EMBEDS = {
-    3: ROOT / "tools" / "visdrone2coco.py",
-    6: ROOT / "training" / "visdrone_eval.py",
-    7: ROOT / "training" / "exps" / "yolox_nano_visdrone.py",
-    13: ROOT / "tools" / "tiling.py",
-    14: ROOT / "training" / "eval_tiled.py",
+    3: ROOT / "tools" / "build_dataset.py",
+    4: ROOT / "training" / "visdrone_eval.py",
+    5: ROOT / "training" / "exps" / "yolox_nano_visdrone.py",
 }
 
 
 def with_notebook_note(path: Path, body: str) -> str:
-    if path.name not in {"visdrone2coco.py", "yolox_nano_visdrone.py"}:
+    if path.name not in {"build_dataset.py", "yolox_nano_visdrone.py"}:
         return body
     if not body.startswith('"""'):
         return body

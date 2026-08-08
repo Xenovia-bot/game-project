@@ -2,7 +2,7 @@
  * yolox_visdrone_demo
  * -------------------
  * KV260 uzerinde YOLOX-Nano video demosu.
- * Siniflar: person, land_vehicle (sea_vehicle ucuncu sinif olarak eklenecek).
+ * Siniflar: land_vehicle, sea_vehicle.
  *
  * Akis: video karesi -> letterbox (114 dolgu, sol-ust) -> INT8 DPU girisi
  *       -> VART ile DPU kosumu -> YOLOX decode (grid + exp + sigmoid, LUT'lu)
@@ -48,11 +48,9 @@
 
 namespace {
 
-// Saha tanimi. `land_vehicle` bisiklet/motosiklet dahil tum kara tasitlarini
-// kapsar. Sira, egitimdeki COCO kategori kimlikleriyle ayni olmali
-// (visdrone2coco.py --classes 2). Deniz araci eklendiginde bu listeye
-// "sea_vehicle" gelecek; kanal sayisi kontrolu kendiliginden uyum saglar.
-const char* kClassNames[] = {"person", "land_vehicle"};
+// Saha tanimi. Sira, egitimdeki COCO kategori kimlikleriyle ayni olmali
+// (tools/build_dataset.py: 1=land_vehicle, 2=sea_vehicle).
+const char* kClassNames[] = {"land_vehicle", "sea_vehicle"};
 constexpr int kNumClassNames = sizeof(kClassNames) / sizeof(kClassNames[0]);
 
 struct Detection {

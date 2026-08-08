@@ -196,15 +196,30 @@ def add_box(record, target, box):
 # --------------------------------------------------------------------------
 # Kaynak okuyucular
 # --------------------------------------------------------------------------
+def has_part(name, part):
+    """Yol bileseni tam eslesme ile aranir.
+
+    Arsiv kokunun nereye isaret ettigine gore ayni dosya
+    'VisDrone2019-DET-train/images/x.jpg' veya 'images/x.jpg' olarak
+    gorunebilir; '/images/' arayan bir kontrol ikincisini kaciririrdi.
+    """
+    return part in name.split("/")
+
+
+def swap_part(name, old, new):
+    parts = name.split("/")
+    return "/".join(new if p == old else p for p in parts)
+
+
 def read_visdrone(archive, split, source="visdrone", stats=None):
     """VisDrone yerel txt formati. category 0 -> ignored-region."""
     names = archive.names()
     images = sorted(n for n in names
-                    if "/images/" in n and n.lower().endswith(".jpg"))
+                    if has_part(n, "images") and n.lower().endswith(".jpg"))
     records = []
     for member in images:
         stem = member.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-        ann_member = member.replace("/images/", "/annotations/")
+        ann_member = swap_part(member, "images", "annotations")
         ann_member = ann_member.rsplit(".", 1)[0] + ".txt"
         if not archive.exists(ann_member):
             continue
@@ -296,10 +311,10 @@ def read_mendeley_yolo(archive, source="mendeley", stats=None):
     """YOLO txt: 'cls cx cy w h', hepsi 0-1 normalize."""
     names = archive.names()
     images = sorted(n for n in names
-                    if "/images/" in n and n.lower().endswith((".jpg", ".png")))
+                    if has_part(n, "images") and n.lower().endswith((".jpg", ".png")))
     records = []
     for member in images:
-        label = member.replace("/images/", "/labels/").rsplit(".", 1)[0] + ".txt"
+        label = swap_part(member, "images", "labels").rsplit(".", 1)[0] + ".txt"
         if not archive.exists(label):
             continue
         # .../dataset/<split>/images/<dosya>
@@ -493,6 +508,14 @@ def main():
                         help="or. visdrone=0.5 (train goruntulerinin orani)")
     parser.add_argument("--dry-run", action="store_true",
                         help="dosya yazma, yalnizca dogrula ve raporla")
+    parser.add_argument("--images-out", default=None,
+                        help="goruntuleri <dizin>/<kaynak>/<ad> duzeninde cikar "
+                             "(COCO file_name alanlariyla birebir ortusur)")
+    parser.add_argument("--source", nargs="*", default=[], metavar="ETIKET=YOL",
+                        help="tek bir kaynagin yolunu degistir. Kaggle'da her "
+                             "veri seti ayri bir /kaggle/input klasorunde "
+                             "oldugu icin gerekir. Etiketler: visdrone-train, "
+                             "visdrone-val, vesselimg, milrec, mendeley")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -508,14 +531,34 @@ def main():
          "mendeley", None),
     ]
 
+    overrides = {}
+    for item in args.source:
+        if "=" not in item:
+            raise SystemExit(f"HATA: 'etiket=yol' bekleniyordu: {item}")
+        key, value = item.split("=", 1)
+        overrides[key.strip()] = Path(value.strip())
+    unknown = set(overrides) - {label for label, _, _, _ in plan}
+    if unknown:
+        raise SystemExit(f"HATA: bilinmeyen kaynak etiketi: {sorted(unknown)}")
+
+    resolved = {}
     for label, filename, source, split in plan:
-        path = data_dir / filename
-        if not path.exists():
-            alt = data_dir / Path(filename).stem
-            if alt.exists():
-                path = alt
-            else:
-                raise SystemExit(f"HATA: kaynak bulunamadi: {path}")
+        if label in overrides:
+            path = overrides[label]
+            if not path.exists():
+                raise SystemExit(f"HATA: --source {label} yolu yok: {path}")
+        else:
+            path = data_dir / filename
+            if not path.exists():
+                alt = data_dir / Path(filename).stem
+                if alt.exists():
+                    path = alt
+                else:
+                    raise SystemExit(f"HATA: kaynak bulunamadi: {path}")
+        resolved[label] = path
+
+    for label, filename, source, split in plan:
+        path = resolved[label]
         print(f">> {label:<16} {path.name}")
         archive = Archive(path)
         try:
@@ -607,6 +650,38 @@ def main():
                      "file_name": r.file_name} for r in records],
     }), encoding="utf-8")
     print(f"yazildi: {manifest}  (goruntuleri cikarmak icin)")
+
+    if args.images_out:
+        extract_images(records, Path(args.images_out), resolved, plan)
+
+
+def extract_images(records, images_out, resolved, plan):
+    """Goruntuleri COCO `file_name` alanlariyla ortusen duzene cikarir.
+
+    Sonuc: <images_out>/<kaynak>/<ad>.jpg  ->  YOLOX tarafinda
+    data_dir=<ust dizin>, name="images" ile dogrudan okunur.
+    Var olan dosyalar atlanir; yarim kalan cikarma guvenle tekrarlanabilir.
+    """
+    source_archive = {}
+    for label, _, source, _ in plan:
+        source_archive.setdefault(source, resolved[label])
+
+    # Ayni kayit tekrar katsayisi yuzunden birden fazla kez gelebilir.
+    unique = {r.file_name: r for r in records}
+    written = skipped = 0
+    for source in sorted({r.source for r in unique.values()}):
+        with Archive(source_archive[source]) as archive:
+            for rec in sorted((r for r in unique.values() if r.source == source),
+                              key=lambda r: r.file_name):
+                target = images_out / rec.file_name
+                if target.exists() and target.stat().st_size > 0:
+                    skipped += 1
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(archive.read(rec.member))
+                written += 1
+        print(f"   {source}: cikarildi")
+    print(f"goruntuler: {written} yazildi, {skipped} zaten vardi -> {images_out}")
 
 
 if __name__ == "__main__":

@@ -328,3 +328,49 @@ class ArchiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PathPartTests(unittest.TestCase):
+    """Arsiv koku farkli seviyelerde olabilir; yol eslestirmesi buna dayanmali.
+
+    Kaggle'da VisDrone genelde
+    '<slug>/VisDrone2019-DET-train/VisDrone2019-DET-train/images/...' seklinde
+    ic ice gelir; kok nereye isaret ederse etsin okuyucu calismalidir.
+    """
+
+    def test_has_part_matches_whole_component_only(self):
+        from tools.build_dataset import has_part
+        self.assertTrue(has_part("VisDrone2019-DET-train/images/a.jpg", "images"))
+        self.assertTrue(has_part("images/a.jpg", "images"))
+        self.assertFalse(has_part("myimages/a.jpg", "images"))
+        self.assertFalse(has_part("images.jpg", "images"))
+
+    def test_swap_part_replaces_component(self):
+        from tools.build_dataset import swap_part
+        self.assertEqual(swap_part("images/a.jpg", "images", "annotations"),
+                         "annotations/a.jpg")
+        self.assertEqual(swap_part("d/images/a.jpg", "images", "labels"),
+                         "d/labels/a.jpg")
+
+    def test_visdrone_reader_works_at_either_root(self):
+        anno = "10,10,20,20,1,4,0,0\n"
+        for prefix in ("", "VisDrone2019-DET-train/"):
+            with tempfile.TemporaryDirectory() as tmp:
+                with make_zip(Path(tmp) / "v.zip", {
+                    f"{prefix}images/0000001_x.jpg": jpeg_bytes(),
+                    f"{prefix}annotations/0000001_x.txt": anno,
+                }) as arc:
+                    recs = read_visdrone(arc, "train")
+                self.assertEqual(len(recs), 1, f"kok={prefix!r}")
+                self.assertEqual(len(recs[0].anns), 1, f"kok={prefix!r}")
+
+    def test_mendeley_reader_works_at_either_root(self):
+        for prefix in ("", "d/dataset/"):
+            with tempfile.TemporaryDirectory() as tmp:
+                with make_zip(Path(tmp) / "m.zip", {
+                    f"{prefix}train/images/x.jpg": jpeg_bytes(200, 100),
+                    f"{prefix}train/labels/x.txt": "0 0.5 0.5 0.2 0.4\n",
+                }) as arc:
+                    recs = read_mendeley_yolo(arc)
+                self.assertEqual(len(recs), 1, f"kok={prefix!r}")
+                self.assertEqual(len(recs[0].anns), 1, f"kok={prefix!r}")

@@ -1,12 +1,26 @@
-# KV260 + YOLOX-Nano + VisDrone: İnsan/Taşıt Tespiti ve Merkez Noktası
+# KV260 + YOLOX-Nano: Havadan Araç Tespiti ve Merkez Noktası
 
-VisDrone2019-DET ile fine-tune edilen **DPU-uyumlu YOLOX-Nano** modelini
-Vitis AI 3.0 ile kuantalayıp **Kria KV260** üzerinde (PetaLinux + VART, C++)
-video dosyasından **insan ve taşıt** tespiti yapan, her tespitin **merkez
-noktasını (cx, cy)** hesaplayıp çizen/loglayan uçtan uca proje.
+Dört havadan-görüntü veri setinden birleştirilmiş bir setle fine-tune edilen
+**DPU-uyumlu YOLOX-Nano** modelini Vitis AI 3.0 ile kuantalayıp **Kria KV260**
+üzerinde (PetaLinux + VART, C++) video dosyasından **kara ve deniz aracı**
+tespiti yapan, her tespitin **merkez noktasını (cx, cy)** hesaplayıp
+çizen/loglayan uçtan uca proje.
 
-**Hedef çalışma noktası:** 2 sınıf (`person`, `vehicle`), 896×512 girdi,
-≥30 FPS, iz bazında yüksek recall.
+**Hedef çalışma noktası:** 2 sınıf (`land_vehicle`, `sea_vehicle`), 896×512
+girdi, ≥30 FPS, takip ile iz bazında yüksek recall.
+
+## Veri kaynakları
+
+| Kaynak | Format | Katkı |
+| --- | --- | --- |
+| VisDrone2019-DET | yerel txt | `land_vehicle`: car, van, truck, bus |
+| Mendeley UAV Military | YOLO txt | `land_vehicle`: tank |
+| Military Vehicle Recognition | Roboflow COCO | `land_vehicle`: tank, APC |
+| VESSELimg | Roboflow COCO | `sea_vehicle`: container, chemical, ro-ro, tugboat |
+
+`tools/build_dataset.py` dördünü tek bir 2 sınıflı COCO setinde birleştirir:
+sınıf eşlemesi, ignore işaretleme, **oturum bazlı** train/val bölmesi ve sert
+doğrulama kapıları içerir. Sonuç: **19.476 train / 4.483 val görüntü**.
 
 ```mermaid
 flowchart LR
@@ -31,11 +45,9 @@ flowchart LR
 
 | Yol | İçerik |
 | --- | --- |
-| `tools/visdrone2coco.py` | VisDrone-DET → COCO JSON; `--classes 2` ile person/vehicle şeması. Ignored-region bilgisini kaybetmez |
-| `tools/tiling.py` | Dilimlenmiş çıkarım için parça geometrisi, sınıf-bazlı NMS, birleştirme. Saf Python — C++'a port edilecek |
+| `tools/build_dataset.py` | Dört kaynağı tek 2 sınıflı COCO'ya birleştirir; sınıf eşlemesi, oturum bazlı bölme, doğrulama kapıları |
 | `tools/verify_kv260_golden.py` | Kartın ham INT8 çıktılarında Python ↔ C++ decode/NMS/merkez eşdeğerlik testi |
 | `training/visdrone_eval.py` | Resmi DET toolkit eşleştirmesi + VOC AP (global top-500), ayrıca P/R/F1 ve sınıf gruplama senaryoları |
-| `training/eval_tiled.py` | Tam kare vs dilimlenmiş çıkarımı aynı val setinde karşılaştırır |
 | `training/kaggle_visdrone_yolox.ipynb` | Kaggle not defteri: kurulum → veri → eğitim → metrikler → tiling ölçümü → paketleme |
 | `training/exps/yolox_nano_visdrone.py` | DPU-uyumlu YOLOX-Nano deney dosyası (ReLU + DPUFocus, 896×512, 2 sınıf) |
 | `quantize/README.md` | Oracle VM + Vitis AI 3.0 docker kurulum ve kuantalama rehberi |
@@ -49,8 +61,8 @@ flowchart LR
 ## Uygulama sırası
 
 1. **Kaggle** — `training/kaggle_visdrone_yolox.ipynb` (GPU + Internet açık).
-   Veri dönüşümünden (`--classes 2`) eğitime, metriklere ve
-   `yolox_visdrone_artifacts.zip` paketine kadar her şeyi yapar.
+   Veri birleştirmeden eğitime, metriklere ve `yolox_aerial_artifacts.zip`
+   paketine kadar her şeyi yapar.
    Beklenen süre: 40 epoch için ~1,5-2 saat (T4).
 2. **Oracle VM** — [quantize/README.md](quantize/README.md): docker kurulumu →
    PTQ kalibrasyon → INT8 AP → xmodel export → `compile_kv260.sh`.
@@ -63,13 +75,18 @@ flowchart LR
 
 ## Kritik teknik kararlar
 
-- **2 sınıf: `person` / `vehicle`**. `vehicle` bisiklet ve motosiklet dahil her
-  türlü taşıtı kapsar. VisDrone'un 10 ince sınıfındaki `car`/`van`,
-  `tricycle`/`awning-tricycle` gibi ayrımlar 20 pikselde insanın bile
-  ayıramadığı ayrımlar; birleştirmek hem doğruluğu hem sistem sadeliğini
-  artırır. Şema `visdrone2coco.py --classes 2` ile üretilir ve hem eğitim hem
-  değerlendirme veri setinde kategori sayısı doğrulanır — eski 10 sınıflı JSON
-  diskte kalırsa eğitim sessizce bozulmak yerine hata verip durur.
+- **2 sınıf: `land_vehicle` / `sea_vehicle`**. Görsel olarak benzeyen sınıflar
+  birleştirilir (car/van/truck/bus/tank aynı sınıf; container/tanker/tugboat
+  aynı sınıf), benzemeyenler atılır (bisiklet, motosiklet, insan, hava aracı).
+  Ölçüt [arXiv 2407.00018](https://arxiv.org/abs/2407.00018): benzer sınıfları
+  birleştirmek yardım eder, farklı olanları birleştirmek zarar verir.
+  Kategori sayısı hem eğitim hem değerlendirme setinde doğrulanır — eski şemalı
+  JSON diskte kalırsa eğitim sessizce bozulmak yerine hata verip durur.
+- **Kaynak bölmeleri yeniden yapılır.** Üç Roboflow kaynağının hepsi bölmeyi
+  kare/kopya bazında yapmış: VESSELimg'in 23 çekim oturumunun tamamı
+  train/valid/test'te birden, diğer ikisinde aynı görüntünün augment kopyaları
+  farklı bölümlerde. Bu haliyle doğrulama skoru şişik çıkardı. Bölme artık
+  **oturum bazlı**; doğrulama kapısı sızıntı bulursa dosya üretilmez.
 - **Girdi 896×512 (16:9)**. 1920×1080 kareyi 640×640'a letterbox etmek
   kanvasın **%44'ünü gri dolguya** harcar ve etkin ölçek 0.333'te kalır.
   896×512 aynı kareyi 0.467 ölçekle işler: %12 daha fazla hesapla **%40 daha

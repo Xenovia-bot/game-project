@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""KV260 DPU'suna (DPUCZDX8G) uyumlu YOLOX-Nano / VisDrone-DET deneyi.
+"""KV260 DPU'suna (DPUCZDX8G) uyumlu YOLOX-Nano deneyi.
+
+Veri: dort kaynaktan birlestirilmis 2 sinifli havadan arac seti
+(bkz. tools/build_dataset.py). Dosya adi tarihsel sebeple korunmustur.
 
 DPU uyumlulugu icin iki degisiklik yapilir:
   1. act="relu": DPU, YOLOX'un varsayilan SiLU aktivasyonunu desteklemez.
@@ -32,15 +35,19 @@ for _helper_dir in (Path(__file__).resolve().parent,
         sys.path.insert(0, str(_helper_dir))
 from visdrone_eval import evaluate_visdrone, format_metrics  # noqa: E402
 
-#: Saha tanimi: yalnizca insan ve tasit. `vehicle` bisiklet/motosiklet dahil
-#: her turlu tasiti kapsar. Veri `visdrone2coco.py --classes 2` ile uretilir.
-TARGET_CLASSES = ("person", "vehicle")
+#: Saha tanimi: havadan bakista kara ve deniz araclari.
+#:   land_vehicle - VisDrone car/van/truck/bus + askeri tank/ZPT
+#:   sea_vehicle  - VESSELimg container/chemical/ro-ro/tugboat
+#: Veri `tools/build_dataset.py` ile dort kaynaktan birlestirilir. Sinif
+#: adlari degerlendirmede COCO kategorilerinden okundugu icin tablolar
+#: sema degisse de dogru kalir.
+TARGET_CLASSES = ("land_vehicle", "sea_vehicle")
 
 
 def assert_class_scheme(coco, expected):
     """Anotasyon semasi modelin sinif sayisiyla uyusmuyorsa hemen durur.
 
-    Eski 10 sinifli `instances_*.json` diskte kalirsa 2 sinifli bir bas
+    Eski bir sema ile uretilmis `instances_*.json` diskte kalirsa model
     sessizce yanlis etiketlerle egitilir ve bu ancak saatler sonra
     degerlendirmede fark edilir. Ucuz bir kapi, pahali bir hatayi onler.
     """
@@ -52,7 +59,7 @@ def assert_class_scheme(coco, expected):
         raise ValueError(
             f"Anotasyon semasi uyusmuyor: {expected} sinif bekleniyordu, "
             f"{len(found)} bulundu ({names}). Veriyi "
-            f"'visdrone2coco.py --classes {expected}' ile yeniden uretin."
+            f"'tools/build_dataset.py' ile yeniden uretin."
         )
 
 
@@ -176,9 +183,13 @@ class Exp(MyExp):
         self.random_size = (14, 18)
 
         # ---- veri seti ----
-        self.data_dir = "datasets/visdrone_coco"
+        # build_dataset.py ciktisi: annotations/ + images/<kaynak>/<ad>.jpg
+        # COCO file_name alanlari kaynak alt klasorunu tasidigi icin hem
+        # egitim hem dogrulama ayni "images" kokunu kullanir.
+        self.data_dir = "datasets/merged"
         self.train_ann = "instances_train.json"
         self.val_ann = "instances_val.json"
+        self.image_folder = "images"
         self.data_num_workers = 2
         self.dataset = None
 
@@ -243,7 +254,7 @@ class Exp(MyExp):
         return VisDroneTrainingDataset(
             data_dir=self.data_dir,
             json_file=self.train_ann,
-            name="train_images",
+            name=self.image_folder,
             img_size=self.input_size,
             expected_num_classes=self.num_classes,
             # VisDrone karelerinde yuzlerce nesne olabilir; varsayilan 50 cok dusuk
@@ -318,7 +329,7 @@ class Exp(MyExp):
         dataset = COCODataset(
             data_dir=self.data_dir,
             json_file=self.val_ann,
-            name="val_images",
+            name=self.image_folder,
             img_size=self.test_size,
             preproc=ValTransform(legacy=legacy),
         )

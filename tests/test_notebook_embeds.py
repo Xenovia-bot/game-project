@@ -1,6 +1,15 @@
+"""Notebook'un %%writefile hucreleri kaynak dosyalarla ayni kalmali.
+
+Kaggle'da calisan kod bu hucrelerdir; repodaki kaynak degisip hucre
+guncellenmezse egitim eski kodla yapilir ve fark saatler sonra anlasilir.
+`python tools/_sync_notebook_embeds.py` bu hizalamayi yapar.
+"""
+
 import json
-import tempfile
 import unittest
+import zipfile
+import io
+import tempfile
 from pathlib import Path
 
 from PIL import Image
@@ -8,11 +17,13 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK = ROOT / "training" / "kaggle_visdrone_yolox.ipynb"
 
+#: tools/_sync_notebook_embeds.py ile ayni tablo olmali.
 EMBEDS = {
-    3: ROOT / "tools" / "visdrone2coco.py",
-    6: ROOT / "training" / "visdrone_eval.py",
-    7: ROOT / "training" / "exps" / "yolox_nano_visdrone.py",
+    3: ROOT / "tools" / "build_dataset.py",
+    4: ROOT / "training" / "visdrone_eval.py",
+    5: ROOT / "training" / "exps" / "yolox_nano_visdrone.py",
 }
+NOTED = {"build_dataset.py", "yolox_nano_visdrone.py"}
 
 
 def notebook_writefile_body(index):
@@ -31,41 +42,62 @@ def strip_notebook_note(body, path):
 
 
 class NotebookEmbedTests(unittest.TestCase):
+    def test_sync_table_matches_the_tool(self):
+        """Iki tablo ayrisirsa senkron sessizce yanlis hucreyi yazar."""
+        source = (ROOT / "tools" / "_sync_notebook_embeds.py").read_text(
+            encoding="utf-8")
+        for index, path in EMBEDS.items():
+            self.assertIn(f"{index}: ROOT / ", source)
+            self.assertIn(f'"{path.name}"', source)
+
     def test_writefile_cells_match_project_sources(self):
         for index, path in EMBEDS.items():
             body = notebook_writefile_body(index)
-            if path.name in {"visdrone2coco.py", "yolox_nano_visdrone.py"}:
+            if path.name in NOTED:
                 body = strip_notebook_note(body, path)
             self.assertEqual(
                 body.replace("\r\n", "\n"),
                 path.read_text(encoding="utf-8").replace("\r\n", "\n"),
-                msg="Notebook cell %d drifted from %s" % (index, path),
+                msg="Notebook hucresi %d, %s ile ayristi" % (index, path),
             )
 
-    def test_embedded_converter_preserves_ignore_semantics(self):
+    def test_embedded_builder_maps_classes_and_ignores(self):
+        """Gomulu build_dataset.py gercekten calisip dogru esleme yapmali."""
         namespace = {}
-        exec(
-            compile(notebook_writefile_body(3), "visdrone2coco.py", "exec"),
-            namespace,
-        )
-        convert = namespace["convert"]
+        exec(compile(notebook_writefile_body(3), "build_dataset.py", "exec"),
+             namespace)
+        read_visdrone = namespace["read_visdrone"]
+        Archive = namespace["Archive"]
+
+        buf = io.BytesIO()
+        Image.new("RGB", (100, 100)).save(buf, "JPEG")
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            images, annotations = root / "images", root / "annotations"
-            images.mkdir()
-            annotations.mkdir()
-            Image.new("RGB", (100, 100)).save(images / "one.jpg")
-            (annotations / "one.txt").write_text(
-                "0,0,40,40,0,0,0,0\n"
-                "5,5,10,10,1,1,0,0\n"
-                "50,50,10,10,1,1,0,0\n"
-            )
-            output = root / "out.json"
-            convert(images, annotations, output)
-            data = json.loads(output.read_text())
-            self.assertEqual(data["images"][0]["ignore_regions"], [[0, 0, 40, 40]])
-            self.assertEqual(len(data["annotations"]), 1)
-            self.assertEqual(data["annotations"][0]["bbox"], [50, 50, 10, 10])
+            zpath = Path(tmp) / "v.zip"
+            with zipfile.ZipFile(zpath, "w") as z:
+                z.writestr("images/one.jpg", buf.getvalue())
+                z.writestr("annotations/one.txt",
+                           "0,0,40,40,1,0,0,0\n"      # ignored-region
+                           "50,50,10,10,1,4,0,0\n"    # car     -> land
+                           "60,60,10,10,1,1,0,0\n"    # yaya    -> atilir
+                           "70,70,10,10,0,4,0,0\n")   # score=0 -> ignore
+            with Archive(zpath) as archive:
+                records = read_visdrone(archive, "train")
+
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record.ignore_regions, [[0.0, 0.0, 40.0, 40.0]])
+        real = [a for a in record.anns if not a["ignore"]]
+        ignored = [a for a in record.anns if a["ignore"]]
+        self.assertEqual(len(real), 1, "yalnizca car kalmali")
+        self.assertEqual(real[0]["bbox"], [50.0, 50.0, 10.0, 10.0])
+        self.assertEqual(real[0]["category_id"], namespace["LAND"])
+        self.assertEqual(len(ignored), 1, "score=0 kutusu ignore olmali")
+
+    def test_notebook_has_no_stale_source_references(self):
+        """Silinen modullere atif kalmamali."""
+        text = NOTEBOOK.read_text(encoding="utf-8")
+        for gone in ("visdrone2coco", "eval_tiled", "tiling.py"):
+            self.assertNotIn(gone, text, f"notebook'ta bayat atif: {gone}")
 
 
 if __name__ == "__main__":
