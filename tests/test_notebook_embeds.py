@@ -164,9 +164,69 @@ class DatasetDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             set(found),
             {"visdrone-train", "visdrone-val", "vesselimg", "milrec", "mendeley"})
+        # Kokler isaret dosyasindan yukari yurunerek bulunur; ust klasor
+        # degil, kaynaga ait en dar dizin secilmeli.
         self.assertEqual(Path(found["vesselimg"]).name, "my-boats")
         self.assertEqual(Path(found["milrec"]).name, "mv.zip")
-        self.assertEqual(Path(found["mendeley"]).name, "military-uav")
+        # labels/ -> <kok>/dataset/train/labels oldugundan kok '<...>/dataset'
+        self.assertEqual(Path(found["mendeley"]).name, "dataset")
+        self.assertEqual(Path(found["mendeley"]).parent.name, "military-uav")
+
+    def test_parent_directory_is_not_mistaken_for_a_source(self):
+        """Tum kaynaklari iceren ust klasor tek bir kaynak sanilmamali.
+
+        Kaggle'da gercekten yasandi: kok dizin alt agacinda milrec'in
+        anotasyon dosyasini bulundurdugu icin 'milrec' olarak secildi ve
+        okuma sifir goruntu dondurdu.
+        """
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 48)).save(buf, "JPEG")
+        jpg = buf.getvalue()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "aerial-vehicle-sources"
+
+            for split in ("train", "val"):
+                d = bundle / "aerial-land" / f"VisDrone2019-DET-{split}"
+                (d / "images").mkdir(parents=True)
+                (d / "annotations").mkdir()
+                (d / "images" / "a.jpg").write_bytes(jpg)
+                (d / "annotations" / "a.txt").write_text("10,10,20,20,1,4,0,0\n")
+
+            d = bundle / "aerial-land" / "Mendeley" / "dataset" / "train"
+            (d / "images").mkdir(parents=True)
+            (d / "labels").mkdir()
+            (d / "images" / "x.jpg").write_bytes(jpg)
+            (d / "labels" / "x.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+
+            # Kaggle zip'i alt klasore aciyor: <kok>/vesselimg/<zip adi>/train/
+            d = bundle / "vesselimg" / "VESSELimg.v4i.coco" / "train"
+            d.mkdir(parents=True)
+            (d / "_annotations.coco.json").write_text(json.dumps({
+                "images": [], "annotations": [],
+                "categories": [{"id": 0, "name": "Container"},
+                               {"id": 1, "name": "Tugboat"}]}))
+
+            d = bundle / "milrec" / "MilRec.v7i.coco" / "train"
+            d.mkdir(parents=True)
+            (d / "_annotations.coco.json").write_text(json.dumps({
+                "images": [], "annotations": [],
+                "categories": [{"id": 0, "name": "tank"},
+                               {"id": 1, "name": "armoured personnel carrier"}]}))
+
+            found = self._discover_from_notebook(root)
+
+        self.assertEqual(Path(found["milrec"]).name, "MilRec.v7i.coco")
+        self.assertEqual(Path(found["vesselimg"]).name, "VESSELimg.v4i.coco")
+        self.assertEqual(Path(found["mendeley"]).name, "dataset")
+        self.assertEqual(Path(found["visdrone-train"]).name,
+                         "VisDrone2019-DET-train")
+        self.assertEqual(Path(found["visdrone-val"]).name,
+                         "VisDrone2019-DET-val")
+        for key, path in found.items():
+            self.assertNotEqual(Path(path).name, "aerial-land",
+                                f"{key} ust klasore cozuldu")
 
     def test_missing_source_raises_with_listing(self):
         with tempfile.TemporaryDirectory() as tmp:

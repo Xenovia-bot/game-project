@@ -268,10 +268,14 @@ def read_roboflow_coco(archive, class_map, source, split_override=None,
                        stats=None):
     """Roboflow COCO export: her bolum klasorunde _annotations.coco.json."""
     records = []
-    for split_dir in ("train", "valid", "test"):
-        member = f"{split_dir}/_annotations.coco.json"
-        if not archive.exists(member):
-            continue
+    # Anotasyon dosyasi arsiv kokunde olmak zorunda degil: Kaggle yuklenen
+    # zip'i '<klasor>/<zip adi>/train/...' seklinde acabiliyor. Bu yuzden
+    # dosya nerede olursa olsun bulunur ve goruntu yollari ona gore kurulur.
+    members = sorted(n for n in archive.names()
+                     if n.rsplit("/", 1)[-1] == "_annotations.coco.json")
+    for member in members:
+        base = member.rsplit("/", 1)[0] if "/" in member else ""
+        split_dir = base.rsplit("/", 1)[-1] if base else "train"
         data = json.loads(archive.read(member))
         cats = {c["id"]: str(c["name"]).strip().lower()
                 for c in data["categories"]}
@@ -287,7 +291,7 @@ def read_roboflow_coco(archive, class_map, source, split_override=None,
 
         split = split_override or ("val" if split_dir in ("valid", "test") else "train")
         for image in data["images"]:
-            member_img = f"{split_dir}/{image['file_name']}"
+            member_img = f"{base}/{image['file_name']}" if base else image["file_name"]
             if not archive.exists(member_img):
                 raise SystemExit(f"HATA: {source} goruntusu eksik: {member_img}")
             rec = Record(source, member_img, f"{source}/{image['file_name']}",
