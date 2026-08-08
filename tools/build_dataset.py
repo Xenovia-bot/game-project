@@ -578,6 +578,15 @@ def main():
                 print(f"   oturum bazli yeniden bolme: {total} oturum -> {val} val")
         finally:
             archive.close()
+        if not got:
+            raise SystemExit(
+                f"HATA: '{label}' kaynagindan hic goruntu okunamadi ({path}).\n"
+                f"  Olasi sebep: klasor duzeni beklenenden farkli, ya da\n"
+                f"  VisDrone icin 'annotations/' yerine YOLO 'labels/' var.\n"
+                f"  Ultralytics'e cevrilmis VisDrone kopyalari ignored-region\n"
+                f"  ve score=0 crowd bilgisini siler; bu boru hatti orijinal\n"
+                f"  VisDrone txt formatini bekler."
+            )
         print(f"   {len(got)} goruntu")
         records.extend(got)
 

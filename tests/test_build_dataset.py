@@ -374,3 +374,22 @@ class PathPartTests(unittest.TestCase):
                     recs = read_mendeley_yolo(arc)
                 self.assertEqual(len(recs), 1, f"kok={prefix!r}")
                 self.assertEqual(len(recs[0].anns), 1, f"kok={prefix!r}")
+
+
+class EmptySourceTests(unittest.TestCase):
+    """Bos kaynak sessizce gecilmemeli.
+
+    Kaggle'daki bazi VisDrone kopyalari Ultralytics'e cevrilmis: 'annotations/'
+    yerine YOLO 'labels/' iceriyorlar ve ignored-region bilgisi silinmis.
+    Boyle bir kaynakta okuyucu hicbir sey bulamaz; bu durumda 0 goruntuyle
+    devam etmek yerine hata verilmelidir.
+    """
+
+    def test_visdrone_reader_returns_nothing_for_yolo_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with make_zip(Path(tmp) / "v.zip", {
+                "images/0000001_x.jpg": jpeg_bytes(),
+                "labels/0000001_x.txt": "3 0.5 0.5 0.2 0.2\n",   # YOLO, annotations yok
+            }) as arc:
+                recs = read_visdrone(arc, "train")
+        self.assertEqual(recs, [], "annotations/ yoksa kayit uretilmemeli")
