@@ -43,12 +43,27 @@ Kod ve `README.md` planın üstündedir.
 
 ## 0. KILITLENMIS HEDEF (2026-08-08)
 
-Sistem **iki sinif** tespit edecek ve her tespitin merkez noktasini uretecek:
+Sistem **tek sinif** tespit edecek ve her tespitin merkez noktasini uretecek:
 
 | Sinif | Kapsam |
 | --- | --- |
-| `military_vehicle` | tank, zirhli arac, askeri kamyon |
-| `ship` | buyuk deniz araci |
+| `ship` | denizde hareket eden gemi / deniz araci |
+
+Insan, kara araci, hava araci **kapsam disi**. VisDrone artik ana veri
+kaynagi degil (deniz araci icermiyor); COCO baslangic checkpoint'i `boat`
+sinifini zaten gordugu icin dogrudan COCO -> denizcilik fine-tune yolu
+izlenecek.
+
+### Bu kapsam neden onceki hedeflerden kolay
+
+- Tek sinif: sinif karisikligi ve makro ortalamada cop sinif yok
+- Buyuk nesne: VisDrone yayasi 896x512'de 5-14 px iken gemi 90-460 px
+- Tekduze su arka plani, yuksek kontrast
+- Kare basina az nesne: takip neredeyse kusursuz, NMS ucuz
+
+Kullanicinin "100 nesnenin 80'i" hedefi bu kapsamda gercekci.
+Girdi cozunurlugu muhtemelen 896x512'den kucultulebilir (or. 640x384) ve
+bu dogrudan FPS kazanci demektir - karar kutu boyut dagilimi olculunce.
 
 Kisitlar:
 
@@ -56,12 +71,12 @@ Kisitlar:
   Uydu goruntusu (xView, DOTA, DIOR, HRSC) **kullanilmayacak**: 0.3 m GSD'de
   7 m'lik bir tank ~23 piksele duser ve kacindigimiz kucuk-nesne problemine
   geri donulur.
-- **Insan tespit edilmeyecek.** Ancak askeri veri setlerinde `soldier`/`people`
-  etiketli oldugu icin bunlar **ignore** olarak isaretlenecek; etiketsiz
-  birakilirsa model onlari arka plan olarak ogrenir ve bu tespiti bozar.
-- Buyuk nesne = kolay problem. VisDrone yayasi 896x512'de 5-14 px iken tank
-  19-37 px, buyuk gemi 93-467 px olur. Kullanicinin "%80 recall" hedefi bu
-  siniflarda gercekci hale gelir.
+- **Hedef disi siniflar ignore olarak isaretlenecek.** Denizcilik veri
+  setlerinde `swimmer`, `buoy`, `life-saving appliance`, `jet-ski` gibi
+  etiketler var. Bunlar tespit edilmeyecek ama etiketsiz de birakilmayacak:
+  etiketsiz kalirlarsa model onlari arka plan olarak ogrenir. Ozellikle
+  samandira ve jet-ski gemiye benzeyebilecegi icin bunlari ignore yapmak
+  hem yanlis pozitifi hem yanlis negatifi onler.
 
 ### Terminoloji tuzagi (iki kez yasandi)
 
