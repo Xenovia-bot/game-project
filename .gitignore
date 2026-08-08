@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Yerel derleme ciktilari
+build/
+*.o
+*.exe
+yolox_visdrone_demo
+tracker_test
+
+# Egitim / kuantalama / kart ciktilari (buyuk, uretilebilir)
+YOLOX_outputs/
+datasets/
+weights/
+artifacts/
+golden/
+*.pth
+*.xmodel
+*.zip
+
+# Video ve olcum ciktilari
+*.avi
+*.mp4
+centers.csv

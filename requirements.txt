@@ -1,0 +1,6 @@
+# Yerel makinede tools/visdrone2coco.py calistirmak icin minimum bagimliliklar.
+# Egitim bagimliliklari Kaggle not defterinde, kuantalama bagimliliklari
+# Vitis AI docker imajinda kuruludur (bkz. README.md).
+Pillow>=10.0
+tqdm>=4.60
+numpy>=1.23
