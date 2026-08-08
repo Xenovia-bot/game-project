@@ -100,5 +100,81 @@ class NotebookEmbedTests(unittest.TestCase):
             self.assertNotIn(gone, text, f"notebook'ta bayat atif: {gone}")
 
 
+
+class DatasetDiscoveryTests(unittest.TestCase):
+    """Notebook hucresi 6, kaynaklari klasor adina degil ICERIGE gore bulmali.
+
+    Kaggle'a manuel yuklemede klasor adlari degisir ve Kaggle zip'leri acabilir.
+    Ada bagli bir arama bu durumda kaynagi bulamaz ve kullanici saatlerce yol
+    hatasiyla ugrasir.
+    """
+
+    def _discover_from_notebook(self, input_root):
+        import re
+        notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+        source = "".join(notebook["cells"][6]["source"])
+        source = re.sub(r"^!.*$", "# shell", source, flags=re.M)
+        body = source.split("SOURCES = discover()")[0]
+        body = body.replace('INPUT = Path("/kaggle/input")',
+                            f'INPUT = Path(r"{input_root}")')
+        namespace = {"Path": Path}
+        exec(compile(body, "cell6", "exec"), namespace)
+        return namespace["discover"]()
+
+    def test_sources_found_despite_unrelated_folder_names(self):
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 48)).save(buf, "JPEG")
+        jpg = buf.getvalue()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for split in ("train", "val"):
+                d = root / f"vd-{split}" / f"VisDrone2019-DET-{split}"
+                (d / "images").mkdir(parents=True)
+                (d / "annotations").mkdir()
+                (d / "images" / "a.jpg").write_bytes(jpg)
+                (d / "annotations" / "a.txt").write_text("10,10,20,20,1,4,0,0\n")
+
+            # VESSELimg: acilmis klasor, alakasiz isim
+            d = root / "my-boats" / "train"
+            d.mkdir(parents=True)
+            (d / "_annotations.coco.json").write_text(json.dumps({
+                "images": [], "annotations": [],
+                "categories": [{"id": 0, "name": "Container"},
+                               {"id": 1, "name": "Tugboat"}]}))
+
+            # milrec: zip, alakasiz isim
+            (root / "stuff").mkdir()
+            with zipfile.ZipFile(root / "stuff" / "mv.zip", "w") as z:
+                z.writestr("train/_annotations.coco.json", json.dumps({
+                    "images": [], "annotations": [],
+                    "categories": [
+                        {"id": 0, "name": "tank"},
+                        {"id": 1, "name": "armoured personnel carrier"}]}))
+
+            # mendeley: images/ + labels/
+            d = root / "military-uav" / "dataset" / "train"
+            (d / "images").mkdir(parents=True)
+            (d / "labels").mkdir()
+            (d / "images" / "x.jpg").write_bytes(jpg)
+            (d / "labels" / "x.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+
+            found = self._discover_from_notebook(root)
+
+        self.assertEqual(
+            set(found),
+            {"visdrone-train", "visdrone-val", "vesselimg", "milrec", "mendeley"})
+        self.assertEqual(Path(found["vesselimg"]).name, "my-boats")
+        self.assertEqual(Path(found["milrec"]).name, "mv.zip")
+        self.assertEqual(Path(found["mendeley"]).name, "military-uav")
+
+    def test_missing_source_raises_with_listing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as ctx:
+                self._discover_from_notebook(Path(tmp))
+        message = str(ctx.exception)
+        self.assertIn("Bulunamayan kaynaklar", message)
+        self.assertIn("vesselimg", message)
+
 if __name__ == "__main__":
     unittest.main()
