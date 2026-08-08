@@ -159,11 +159,15 @@ class Record:
     """Birlestirilmis veri setindeki tek bir goruntu."""
 
     __slots__ = ("source", "member", "file_name", "width", "height",
-                 "split", "anns", "ignore_regions", "group")
+                 "split", "anns", "ignore_regions", "group", "origin")
 
     def __init__(self, source, member, file_name, width, height, split, group):
         self.source = source          # kaynak adi (visdrone, vesselimg, ...)
         self.member = member          # arsiv icindeki yol
+        # Goruntunun geldigi arsiv. Kaynak adina gore eslemek yetmez:
+        # visdrone train ve val ayni kaynak adini paylasir ama farkli
+        # zip'lerde durur.
+        self.origin = None
         self.file_name = file_name    # cikti COCO'daki goreli yol
         self.width = width
         self.height = height
@@ -582,6 +586,8 @@ def main():
                 print(f"   oturum bazli yeniden bolme: {total} oturum -> {val} val")
         finally:
             archive.close()
+        for _record in got:
+            _record.origin = path
         if not got:
             raise SystemExit(
                 f"HATA: '{label}' kaynagindan hic goruntu okunamadi ({path}).\n"
@@ -665,27 +671,26 @@ def main():
     print(f"yazildi: {manifest}  (goruntuleri cikarmak icin)")
 
     if args.images_out:
-        extract_images(records, Path(args.images_out), resolved, plan)
+        extract_images(records, Path(args.images_out))
 
 
-def extract_images(records, images_out, resolved, plan):
+def extract_images(records, images_out):
     """Goruntuleri COCO `file_name` alanlariyla ortusen duzene cikarir.
 
     Sonuc: <images_out>/<kaynak>/<ad>.jpg  ->  YOLOX tarafinda
     data_dir=<ust dizin>, name="images" ile dogrudan okunur.
     Var olan dosyalar atlanir; yarim kalan cikarma guvenle tekrarlanabilir.
     """
-    source_archive = {}
-    for label, _, source, _ in plan:
-        source_archive.setdefault(source, resolved[label])
-
     # Ayni kayit tekrar katsayisi yuzunden birden fazla kez gelebilir.
     unique = {r.file_name: r for r in records}
+    by_origin = defaultdict(list)
+    for rec in unique.values():
+        by_origin[str(rec.origin)].append(rec)
+
     written = skipped = 0
-    for source in sorted({r.source for r in unique.values()}):
-        with Archive(source_archive[source]) as archive:
-            for rec in sorted((r for r in unique.values() if r.source == source),
-                              key=lambda r: r.file_name):
+    for origin in sorted(by_origin):
+        with Archive(origin) as archive:
+            for rec in sorted(by_origin[origin], key=lambda r: r.file_name):
                 target = images_out / rec.file_name
                 if target.exists() and target.stat().st_size > 0:
                     skipped += 1
@@ -693,7 +698,7 @@ def extract_images(records, images_out, resolved, plan):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.read(rec.member))
                 written += 1
-        print(f"   {source}: cikarildi")
+        print(f"   {Path(origin).name}: cikarildi")
     print(f"goruntuler: {written} yazildi, {skipped} zaten vardi -> {images_out}")
 
 

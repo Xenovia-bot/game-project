@@ -417,3 +417,53 @@ class SourceOverrideTests(unittest.TestCase):
         text = source.read_text(encoding="utf-8")
         self.assertIn('"--source", action="append"', text,
                       "--source append olmali, yoksa tekrarlar birbirini ezer")
+
+
+class ExtractImagesTests(unittest.TestCase):
+    """Goruntuler dogru arsivden cikarilmali.
+
+    visdrone train ve val ayni kaynak adini paylasir ama farkli zip'lerdedir.
+    Arsivi kaynak adina gore eslemek val goruntulerini train zip'inde aratir
+    ve KeyError verir.
+    """
+
+    def test_two_archives_with_same_source_name(self):
+        from tools.build_dataset import Record, extract_images
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            train_zip, val_zip = root / "tr.zip", root / "va.zip"
+            with zipfile.ZipFile(train_zip, "w") as z:
+                z.writestr("images/a.jpg", b"TRAIN")
+            with zipfile.ZipFile(val_zip, "w") as z:
+                z.writestr("images/b.jpg", b"VAL")
+
+            train_rec = Record("visdrone", "images/a.jpg", "visdrone/a.jpg",
+                               10, 10, "train", "visdrone:a")
+            train_rec.origin = train_zip
+            val_rec = Record("visdrone", "images/b.jpg", "visdrone/b.jpg",
+                             10, 10, "val", "visdrone:b")
+            val_rec.origin = val_zip
+
+            out = root / "images"
+            extract_images([train_rec, val_rec], out)
+
+            self.assertEqual((out / "visdrone/a.jpg").read_bytes(), b"TRAIN")
+            self.assertEqual((out / "visdrone/b.jpg").read_bytes(), b"VAL")
+
+    def test_existing_files_are_skipped(self):
+        from tools.build_dataset import Record, extract_images
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "s.zip"
+            with zipfile.ZipFile(src, "w") as z:
+                z.writestr("images/a.jpg", b"NEW")
+            rec = Record("s", "images/a.jpg", "s/a.jpg", 10, 10, "train", "g")
+            rec.origin = src
+            out = root / "images"
+            (out / "s").mkdir(parents=True)
+            (out / "s/a.jpg").write_bytes(b"OLD")
+            extract_images([rec], out)
+            self.assertEqual((out / "s/a.jpg").read_bytes(), b"OLD",
+                             "var olan dosya yeniden yazilmamali")
