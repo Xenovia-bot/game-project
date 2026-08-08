@@ -1,8 +1,8 @@
 /*
  * yolox_visdrone_demo
  * -------------------
- * KV260 uzerinde YOLOX-Nano (VisDrone, 2 sinif: person/vehicle)
- * video demosu.
+ * KV260 uzerinde YOLOX-Nano video demosu.
+ * Siniflar: person, land_vehicle (sea_vehicle ucuncu sinif olarak eklenecek).
  *
  * Akis: video karesi -> letterbox (114 dolgu, sol-ust) -> INT8 DPU girisi
  *       -> VART ile DPU kosumu -> YOLOX decode (grid + exp + sigmoid, LUT'lu)
@@ -48,10 +48,11 @@
 
 namespace {
 
-// Saha tanimi: insan + tasit. `vehicle` bisiklet/motosiklet dahil her turlu
-// tasiti kapsar. Sira, egitimdeki COCO kategori kimlikleriyle ayni olmali
-// (visdrone2coco.py --classes 2).
-const char* kClassNames[] = {"person", "vehicle"};
+// Saha tanimi. `land_vehicle` bisiklet/motosiklet dahil tum kara tasitlarini
+// kapsar. Sira, egitimdeki COCO kategori kimlikleriyle ayni olmali
+// (visdrone2coco.py --classes 2). Deniz araci eklendiginde bu listeye
+// "sea_vehicle" gelecek; kanal sayisi kontrolu kendiliginden uyum saglar.
+const char* kClassNames[] = {"person", "land_vehicle"};
 constexpr int kNumClassNames = sizeof(kClassNames) / sizeof(kClassNames[0]);
 
 struct Detection {
@@ -123,7 +124,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Kullanim: " << argv[0]
               << " <model.xmodel> <video> [cikti.avi] [centers.csv]"
                  " [--conf 0.15] [--nms 0.45] [--max-frames N]"
-                 " [--dump-first-frame DIR]\n";
+                 " [--dump-first-frame DIR] [--no-track]"
+                 " [--track-n-init 3] [--track-max-age 30]\n";
     return 1;
   }
   std::string model_path = argv[1];

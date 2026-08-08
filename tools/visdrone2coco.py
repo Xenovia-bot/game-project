@@ -38,12 +38,14 @@ VISDRONE_CLASSES = (
 )
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
-#: --classes 2: saha tanimi. `vehicle` her turlu tasiti kapsar. Ignore ve
-#: ignored-region mantigi degismez; yalnizca hedef sinif kimlikleri eslenir.
-TWO_CLASS_NAMES = ("person", "vehicle")
+#: --classes 2: VisDrone kaynakli saha tanimi. VisDrone yalnizca kara
+#: tasiti icerdigi icin sinif adi bilerek `land_vehicle`: deniz araci
+#: ayri bir veri setinden ucuncu sinif olarak eklenecek.
+#: Ignore ve ignored-region mantigi degismez; yalnizca kimlikler eslenir.
+TWO_CLASS_NAMES = ("person", "land_vehicle")
 TWO_CLASS_MAP = {
     1: 1, 2: 1,                                  # pedestrian, people
-    3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2,  # tum tasitlar
+    3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2,  # tum kara tasitlari
 }
 
 SCHEMES = {
