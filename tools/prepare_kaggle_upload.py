@@ -31,8 +31,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", default=str(ROOT / "datasets"))
     parser.add_argument("--out", default=str(Path.home() / "kaggle_upload"))
-    parser.add_argument("--user", default="burakzorgecen",
-                        help="Kaggle kullanici adi (dataset id icin)")
+    parser.add_argument("--user", default="burakzorgeen",
+                        help="Kaggle kullanici adi (dataset id icin). "
+                             "Profil adresindeki kaggle.com/<ad> ile birebir "
+                             "ayni olmali, yoksa 'datasets create' reddeder.")
     parser.add_argument("--slug", default="aerial-vehicle-sources")
     args = parser.parse_args()
 
