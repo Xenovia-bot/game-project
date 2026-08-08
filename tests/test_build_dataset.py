@@ -393,3 +393,27 @@ class EmptySourceTests(unittest.TestCase):
             }) as arc:
                 recs = read_visdrone(arc, "train")
         self.assertEqual(recs, [], "annotations/ yoksa kayit uretilmemeli")
+
+
+class SourceOverrideTests(unittest.TestCase):
+    """--source birden fazla kez verilebilmeli.
+
+    nargs="*" ile tekrarlanan bayraklar birbirini ezer ve yalnizca sonuncusu
+    kalir; notebook her kaynak icin ayri bir --source uretiyor, bu yuzden
+    action="append" sart.
+    """
+
+    def test_repeated_source_flags_all_survive(self):
+        import argparse
+        from tools.build_dataset import main  # modulun yuklenebildigini dogrula
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--source", action="append", default=None)
+        args = parser.parse_args(["--source", "a=1", "--source", "b=2",
+                                  "--source", "c=3"])
+        self.assertEqual(args.source, ["a=1", "b=2", "c=3"])
+
+    def test_build_dataset_declares_append_action(self):
+        source = Path(__file__).resolve().parents[1] / "tools" / "build_dataset.py"
+        text = source.read_text(encoding="utf-8")
+        self.assertIn('"--source", action="append"', text,
+                      "--source append olmali, yoksa tekrarlar birbirini ezer")

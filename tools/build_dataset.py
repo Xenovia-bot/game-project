@@ -511,11 +511,15 @@ def main():
     parser.add_argument("--images-out", default=None,
                         help="goruntuleri <dizin>/<kaynak>/<ad> duzeninde cikar "
                              "(COCO file_name alanlariyla birebir ortusur)")
-    parser.add_argument("--source", nargs="*", default=[], metavar="ETIKET=YOL",
-                        help="tek bir kaynagin yolunu degistir. Kaggle'da her "
-                             "veri seti ayri bir /kaggle/input klasorunde "
-                             "oldugu icin gerekir. Etiketler: visdrone-train, "
-                             "visdrone-val, vesselimg, milrec, mendeley")
+    # action="append": her --source bir oncekini ezmez. nargs="*" ile
+    # tekrarlanan bayraklar birbirini siler ve yalnizca sonuncusu kalirdi.
+    parser.add_argument("--source", action="append", default=None,
+                        metavar="ETIKET=YOL",
+                        help="tek bir kaynagin yolunu degistir; birden fazla "
+                             "kez verilebilir. Kaggle'da her veri seti ayri "
+                             "bir /kaggle/input klasorunde oldugu icin gerekir. "
+                             "Etiketler: visdrone-train, visdrone-val, "
+                             "vesselimg, milrec, mendeley")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -532,7 +536,7 @@ def main():
     ]
 
     overrides = {}
-    for item in args.source:
+    for item in (args.source or ()):
         if "=" not in item:
             raise SystemExit(f"HATA: 'etiket=yol' bekleniyordu: {item}")
         key, value = item.split("=", 1)
