@@ -72,7 +72,7 @@ class TwoClassSchemeTests(unittest.TestCase):
             data = json.loads(out.read_text())
 
         self.assertEqual(
-            [c["name"] for c in data["categories"]], ["person", "vehicle"]
+            [c["name"] for c in data["categories"]], ["person", "land_vehicle"]
         )
         targets = [a for a in data["annotations"] if not a.get("iscrowd")]
         self.assertEqual(sorted(a["category_id"] for a in targets), [1, 2, 2])
