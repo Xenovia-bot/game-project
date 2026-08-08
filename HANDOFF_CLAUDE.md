@@ -1,97 +1,92 @@
-# Claude Handoff — KV260 YOLOX-Nano × VisDrone
+# Claude Handoff — KV260 YOLOX-Nano · Havadan Araç Tespiti
 
-Bu dosya, önceki Cursor sohbetinin bağlamını kayıpsız devam ettirmek içindir.
-Yeni Claude oturumunda **önce bunu**, sonra planı ve `C:\Users\emrez\proje` klasörünü okut.
+**Bu dosyayı yeni oturumda ilk okuyun.** Ardından `README.md`.
+Workspace: `C:\Users\emrez\proje` · Dil: **Türkçe** · Git: yerel repo var, uzak yok.
 
-## 1. Proje hedefi
+---
 
-KV260 kartında YOLOX-Nano ile VisDrone nesne tespiti; her kutunun merkez noktası:
+## 1. Hedef (KİLİTLİ — yeniden açmayın)
 
-`cx = (x1+x2)/2`, `cy = (y1+y2)/2`
+KV260 kartında video dosyasından **2 sınıf** tespiti ve her tespitin merkez
+noktası:
 
-Çıktılar: `out.avi` + `centers.csv` + FPS özeti.
-
-Zincir:
-
-1. Kaggle → fine-tune + AP@500
-2. Oracle VM (Ubuntu) → Vitis AI **3.0** PTQ + derleme
-3. KV260 → C++ VART demo + golden test
-
-## 2. Plan dosyası (dikkat: kısmen eski)
-
-Plan yolu:
-
-`C:\Users\emrez\.cursor\plans\kv260_yolox_visdrone_planı_b9133002.plan.md`
-
-Planın **hedefi doğru**, ama bazı maddeler **sonraki düzeltmelerle geçersiz**.
-Kod ve `README.md` planın üstündedir.
-
-### Planda artık yanlış / güncellenmiş olanlar
-
-| Plan ifadesi | Güncel gerçek |
-| --- | --- |
-| Vitis AI Model Zoo `pt_yolox-nano` tabanı | **Kullanılmıyor.** Megvii `yolox_nano.pth` + DPUFocus/ReLU Exp |
-| YOLOX `main` / unpinned clone | Sabit commit: `6ddff4824372906469a7fae2dc3206c7aa4bbaee` |
-| ignored/others atılır | `category=0` ignore korunur; `others`(11) hedef değil; `score=0` sınıf-özel crowd |
-| 10 sınıf | **2 sınıf**: person / vehicle (`--classes 2`) |
-| 640×640 kare girdi | **896×512 (16:9)** — letterbox dolgusu %44'ten ~%0'a iner |
-| 80 epoch | **40 epoch** — model 40'ta doyuyor (ölçüldü) |
-| COCO mAP / maxDets=100 | Resmi VisDrone tarzı **global top-500 + VOC AP** (`training/visdrone_eval.py`) |
-| QAT Kaggle yedek planı | **Uygulanabilir değil** (QuantStub vb. gerekir). PTQ kaybı >0.02 ise export yok |
-| “tek DPU subgraph sayısı 1” yeter | Graph **yalnızca 1 DPU subgraph** olmalı; CPU subgraph olursa fail |
-| Kod iskeleti eksik | Repo uygulandı; review sonrası güvenlik kapıları eklendi |
-
-## 0. KILITLENMIS HEDEF (2026-08-08)
-
-Sistem **iki sinif** tespit edecek ve her tespitin merkez noktasini uretecek:
-
-| Sinif | Kapsam |
+| Sınıf | Kapsam |
 | --- | --- |
 | `land_vehicle` | VisDrone car/van/truck/bus + askeri tank/ZPT |
 | `sea_vehicle` | container, chemical tanker, Ro-Ro, tugboat |
 
-Insan ve hava araci **kapsam disi** (atilir, arka plan olur).
-Veri `tools/build_dataset.py` ile dort kaynaktan birlestirilir:
-train 19.476 goruntu / 205.340 kutu, val 4.483 / 21.681.
+`cx = (x1+x2)/2`, `cy = (y1+y2)/2` → `centers.csv` + `out.avi` + FPS özeti.
 
-### Sinif kararlarinin olcutu
+Çalışma noktası: **896×512 girdi, 40 epoch, conf 0.15, IoU tabanlı takip, ≥30 FPS.**
 
-[arXiv 2407.00018](https://arxiv.org/abs/2407.00018): **gorsel olarak benzer**
-siniflari birlestirmek mAP'yi yukseltir, **farkli** olanlari birlestirmek
-dusurur (kanguru turleri 0.968'e cikti; domuz+keci 0.897/0.781 -> 0.699).
+> Taksonomi bu noktaya gelene kadar **beş kez** değişti (10 sınıf → 2 → 4 → 3
+> → tek sınıf ship → 2 sınıf). Kullanıcı her turda fikir değiştirdi ve hiç
+> eğitim yapılmadı. **Yeni bir taksonomi önerisi gelirse önce "önce bir kez
+> uçtan uca çalıştıralım" deyin.**
 
-Buna gore havadan bakista:
-- car/van/truck/bus/tank -> hepsi zeminde dikdortgen govde -> birlestirildi
-- container/tanker/ro-ro/tugboat -> hepsi sudaki govde -> birlestirildi
-- bisiklet/motosiklet (ince siluet), insan, hava araci -> **atildi**
-- Buoy -> atildi ama **kasten**: yukaridan tekneye benzer, hard negative
-- Pilot (kilavuz botu, medyan 15 px) -> **ignore**: deniz araci ama cok kucuk
+## 2. Zincir ve nerede olduğumuz
 
-Kisitlar:
+| Aşama | Durum |
+| --- | --- |
+| Veri birleştirme | ✅ **bitti, doğrulandı** (19.476 train / 4.483 val) |
+| Kaggle eğitimi (2 sınıf) | ⬜ **sıradaki iş** — ~1,5-2 saat |
+| Oracle VM · Vitis AI 3.0 PTQ | ⬜ |
+| KV260 · C++ VART + golden test | ⬜ |
+| Rapor | ⬜ |
 
-- **Bakis acisi drone/ucak olmali** — havadan karaya veya havadan denize.
-  Uydu goruntusu (xView, DOTA, DIOR, HRSC) **kullanilmayacak**: 0.3 m GSD'de
-  7 m'lik bir tank ~23 piksele duser ve kacindigimiz kucuk-nesne problemine
-  geri donulur.
-- **Hedef disi siniflar iki turlu ele alinir.** Gorsel olarak farkli ve
-  hedef olmayan siniflar (insan, hava araci, bisiklet) **atilir** -> arka plan
-  olurlar, bu istenen davranistir. Hedefe benzeyen ama kapsam disi olanlar
-  (Pilot botu) **ignore** isaretlenir: ne tespit beklenir ne arka plan sayilir.
+## 3. Veri seti (tamamlandı)
 
-### Terminoloji tuzagi (iki kez yasandi)
+Dört kaynak `tools/build_dataset.py` ile tek 2 sınıflı COCO'ya birleşiyor.
+Zip'ler `datasets/` altında; **Kaggle'a `aerial-vehicle-sources` adıyla
+yüklendi.** Yerel çıktı `datasets/merged/` (gitignore'da).
 
-`tank` kelimesi geçen her sinif askeri tank degildir:
+```
+kaynak        goruntu   train    val     land     sea  ignore
+mendeley         7985    6469   1516     6364       0       0
+milrec           2863    2149    714     3085       0       0
+vesselimg        6092    4387   1705        0   11909     397
+visdrone         7019    6471    548   205663       0       0
+-------------------------------------------------------------
+train        19476 goruntu / 205340 kutu   (land 196490, sea 8850, ignore 368)
+val           4483 goruntu /  21681 kutu   (land  18622, sea 3059, ignore  29)
+```
 
-- xView `Tank Car` = demiryolu tanker vagonu
-- xView / DOTA `Storage Tank` = yakit deposu
+### Sınıf kararları (gerekçeli, değiştirmeyin)
 
-Veri seti secerken sinif listesi **resmi dokumandan** dogrulanmali.
+Ölçüt: [arXiv 2407.00018](https://arxiv.org/abs/2407.00018) — **görsel olarak
+benzer** sınıfları birleştirmek mAP'yi yükseltir, **farklı** olanları
+birleştirmek düşürür (kanguru türleri 0.968'e çıktı; domuz+keçi 0.897/0.781 →
+0.699).
 
-## 3. Mevcut durum (2026-08-08)
+- **Tutulan → land:** car, van, truck, bus, tank (×2 kaynak), APC
+- **Tutulan → sea:** container, chemical, passenger-roro, tugboat
+- **Atılan (arka plan olur, bu istenen):** insan/asker, bisiklet, motosiklet,
+  tricycle, awning-tricycle, hava aracı, drone, **Buoy** (kasten — yukarıdan
+  tekneye benzer, hard negative)
+- **Ignore (ne hedef ne arka plan):** `Pilot` botu (medyan 15 px), VisDrone
+  ignored-region ve score=0 crowd kutuları
 
-### Tamamlanan: 10 sınıflı referans çalıştırma
+### Bölme
 
-Kaggle'da 10 sınıf / 640×640 / 80 epoch eğitimi bitti:
+- VisDrone: kendi resmi train/val bölmesi
+- Diğer üçü: Roboflow bölmesi **atıldı**, oturum bazlı yeniden bölündü
+  (`ROBOFLOW_VAL_FRACTION = 0.25`, `SPLIT_SEED = 1337`)
+- **Test bölümü yok** — gerçek test kartta. İstenirse eklenebilir.
+
+## 4. ⚠️ Bilinen zayıflıklar (kullanıcıya söylendi)
+
+| Sorun | Ayrıntı |
+| --- | --- |
+| 🔴 **`sea_vehicle` 17 sahneden** | 4.387 görüntü ama Valencia Limanı'nda yalnızca 17 kamera kurulumu. Model sahneyi ezberleyebilir. Val de aynı limandan 6 sahne. **Tek gerçek çözüm ikinci bir denizcilik kaynağı.** |
+| 🟡 Dengesizlik 22:1 | Müdahale edilmedi. `--repeat vesselimg=3` / `--subsample visdrone=0.5` düğmeleri hazır ama **kapalı** — önce ölçülecek |
+| 🟡 Dört farklı alan | VisDrone şehir / VESSELimg liman / milrec savaş / mendeley karışık. 0.9M model için zor |
+| 🟡 Mendeley içeriği | Makalede "sentetik veri artırma" geçiyor; oranı **doğrulanmadı** |
+| 🟡 Kaynak etiket kalitesi | Dönüşümün sadık olduğu kanıtlandı, **orijinal etiketlerin doğruluğu değil** |
+| 🟡 Boş kare oranı | train %24, val %36 (tipik %10). Mendeley kaynaklı — asker/insan atılınca kare boşalıyor |
+
+## 5. Ölçülmüş gerçekler (yeniden türetmeyin)
+
+**Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07:
 
 | Epoch | AP@[.50:.95] | AP@0.50 | AP@0.75 |
 | --- | --- | --- | --- |
@@ -99,138 +94,170 @@ Kaggle'da 10 sınıf / 640×640 / 80 epoch eğitimi bitti:
 | 45 | 0.1056 | 0.2144 | 0.0932 |
 | 80 | 0.1087 | 0.2205 | 0.0965 |
 
-İki bulgu sonraki kararları belirledi:
+- Model **epoch ~40'ta doydu** (45→80 arası +0.006) → `max_epoch = 40`
+- **AP75/AP50 = 0.44** → darboğaz sınıflandırma değil **çözünürlük**
+- Eğitim hızı: T4'te batch 16, 640², `iter_time ≈ 0.42 s`, `data_time ≈ 0.05 s`
+  (veri yükleme darboğaz **değil**; SimOTA baskın)
+- **YOLOX'un `ETA` alanı kümülatif ortalama kullanır** — ilk yavaş
+  iterasyonları taşır, başta 3-5 kat şişik görünür. Gerçek hız için logdaki
+  `iter_time` (son 50 iterasyonun ortalaması) kullanın.
 
-1. Model **epoch ~40'ta doydu** (45→80 arası +0.006) → `max_epoch` 40.
-2. **AP75/AP50 = 0.44** → darboğaz sınıflandırma değil çözünürlük →
-   girdi 16:9'a (896×512) çevrildi.
+**Girdi boyutu** — birleşik veri üzerinde ölçüldü (varsayım değil):
 
-### Yapılan pivot: 2 sınıf + 16:9 girdi + takip
+| Girdi | Hesap | Ort. ölçek | Kutu medyanı |
+| --- | --- | --- | --- |
+| 640×640 | 1.00× | 0.473 | 16.0 px |
+| **896×512** | **1.12×** | **0.548** | **19.7 px** |
+| 960×544 | 1.27× | 0.584 | 21.0 px |
 
-Kullanıcının hedefi **yalnızca insan ve taşıtın merkez noktası**, ≥30 FPS,
-iz bazında yüksek recall. Buna göre:
+Görüntülerin %59'u kare olmasına rağmen 896×512 kazanıyor: kutuların %92'si
+VisDrone'dan (16:9 / 4:3) geliyor.
 
-- `tools/build_dataset.py` → dört kaynaktan `land_vehicle` / `sea_vehicle`
-- `input_size = (512, 896)`, `random_size = (14, 18)`
-- `max_epoch = 40`, `no_aug_epochs = 10`
-- Dağıtım eşiği `0.30` → `0.15` (recall odaklı; takip temizliyor)
-- `main.cpp` sınıf adları 2'ye indi; `compile_kv260.sh` kanal sayısını
-  sınıf sayısından türetiyor (5+N; 15 hardcode kalktı)
-- Eğitim **ve** val veri setinde kategori sayısı doğrulanıyor — eski
-  10 sınıflı JSON kalırsa eğitim başlamadan hata verir
+**Bağlam:** VisDrone'da yayınlanmış YOLOv11 sonucu F1 = 0.347; yarışma rekoru
+AP@0.50 = 0.653 (ensemble + 1536px + tiling). Kullanıcı bir ara "%80 doğruluk"
+istedi — VisDrone'da bu **kimsede yok**; yeni 2 sınıflı kapsamda daha
+gerçekçi. Kare bazında değil **iz bazında** ölçülmeli.
 
-### Eklenen: takip (tracking)
+## 6. Kod haritası
 
-`deploy/src/tracker.hpp` — IoU tabanlı, ByteTrack'in iki aşamalı
-eşleştirmesiyle. Kalman ve Macar algoritması yok; hareket modeli sabit hız.
-VART/OpenCV bağımsız tutuldu, bu yüzden kart dışında derlenip test edilebiliyor
-(`deploy/tests/test_tracker.cpp`, 10 test). `tests/test_cpp_tracker.py` bunu
-otomatik derleyip çalıştırır; derleyici yoksa atlar.
+```
+tools/build_dataset.py        4 kaynak -> tek 2 sinifli COCO. Sinif eslemesi,
+                              oturum bazli bolme, SERT dogrulama kapilari.
+                              --source (Kaggle yollari), --images-out,
+                              --repeat / --subsample (varsayilan kapali)
+tools/audit_dataset.py        BAGIMSIZ denetleyici: 10 kontrol, kaynakla
+                              birebir karsilastirma dahil
+tools/shorten_zip_names.py    Kaggle 248 bayt sinirini asan adlari kisaltir
+tools/prepare_kaggle_upload.py  Yukleme klasorunu hazirlar
+tools/verify_kv260_golden.py  Python <-> C++ esdegerlik testi
+tools/_sync_notebook_embeds.py  Notebook %%writefile hucrelerini kaynakla esitler
 
-`centers.csv` artık `frame,track_id,class_id,class_name,score,cx,cy`.
-Yeni bayraklar: `--no-track`, `--track-n-init` (3), `--track-max-age` (30).
-Golden dump takipten **önceki** ham tespitleri yazar; eşdeğerlik testi etkilenmez.
+training/visdrone_eval.py     Resmi VisDrone AP@500 (calcAccuracy.m ile birebir)
+                              + P/R/F1 + sinif gruplama senaryolari
+training/exps/yolox_nano_visdrone.py
+                              2 sinif, 896x512, 40 epoch, ReLU + DPUFocus
+training/kaggle_visdrone_yolox.ipynb   15 hucre (asagida)
+build/make_notebook.py        Notebook'u ureten script (elle duzenlemeyin)
 
-### Eklenen ölçüm altyapısı
+quantize/quantize_yolox.py    PTQ / INT8 AP / xmodel export / DPU inspector
+quantize/compile_kv260.sh     Derleme + subgraph dogrulama (kanal = 5 + sinif)
 
-- P/R/F1 (en iyi nokta + dağıtım eşiği), sınıf bazlı AP
-- Sınıf gruplama senaryoları (`GROUP_2`, `GROUP_3`) — bir modeli farklı sınıf
-  tanımlarıyla yeniden eğitmeden ölçmek için
+deploy/src/main.cpp           VART demo: decode -> NMS -> takip -> merkez -> CSV
+deploy/src/tracker.hpp        IoU + ByteTrack 2 asamali eslestirme, sabit hiz.
+                              VART/OpenCV BAGIMSIZ -> kart disinda test edilir
+deploy/tests/test_tracker.cpp 10 C++ testi
 
-- Yerel doğrulama: `python -m unittest discover -s tests -v` → **53/53 OK**
-  (g++ PATH'te ise C++ tracker testleri dahil).
-- Notebook `%%writefile` hücreleri kaynakla senkron: `python tools/_sync_notebook_embeds.py`
+tests/                        69 test. Calistirma:
+                              python -m unittest discover -s tests
+```
 
-### Sıradaki kullanıcı adımı
+**Notebook hücreleri:** 0 md · 1 kurulum · 2 YOLOX · **3-4-5 `%%writefile`**
+(build_dataset / visdrone_eval / exp — `_sync_notebook_embeds.py` doldurur) ·
+**6 veri keşfi + birleştirme** · 7 Megvii init · 8 md · **9 eğitim** ·
+10 resume · 11 değerlendirme · 12 görsel kontrol · 13 paketleme · 14 md
 
-1. `training/kaggle_visdrone_yolox.ipynb` → Kaggle'da sıfırdan çalıştır
-   (2 sınıf, 896×512, 40 epoch — ~1,5-2 saat)
-2. Yeni `yolox_aerial_artifacts.zip` indir
-3. Eski şemalı COCO JSON / checkpoint / xmodel **kullanma**
-4. VM: `quantize/README.md` — `--inspect` ile **kare olmayan girdinin** tek DPU
-   subgraph'ine derlendiğini doğrula
-5. Kart: `deploy/README.md` + golden test, **gerçek FPS'i ölç**
-6. FPS ölçüldükten sonra: gerekirse tiling (takip artık hazır)
+Notebook'u **elle düzenlemeyin**: `python build/make_notebook.py` sonra
+`python tools/_sync_notebook_embeds.py`. Bir test bu senkronu zorunlu kılar.
 
-### Henüz yapılmayanlar / bilinen sınırlar
+## 7. 🪤 Sert öğrenilmiş tuzaklar
 
-- `main.cpp` VART/OpenCV gerektirdiği için yerelde **derlenemedi**; takip
-  entegrasyonu gözle incelendi, ilk gerçek derleme kartta/SDK'da olacak.
-- Golden test yalnızca ilk karenin ham tespitlerini karşılaştırır; **takip
-  zamansal olduğu için golden testle doğrulanamaz** — derlenen C++ birim
-  testleriyle doğrulanıyor.
-- **İz bazında recall ölçülmedi.** Bunun için iz kimlikli video veri seti
-  (VisDrone-VID / MOT) gerekir. Kullanıcının "100 nesnenin 80'i" hedefi
-  kare bazında değil, bu metrikle ölçülmelidir.
-- **Sınıf dengesizliği** train'de 22:1 (land:sea), val'de 6:1. Müdahale
-  edilmedi; `--repeat` / `--subsample` düğmeleri hazır ama kapalı. Sınıf bazlı
-  AP ölçülünce karar verilecek.
-- **VESSELimg çeşitliliği düşük**: 6.092 görüntü ama yalnızca 23 sahne, hepsi
-  Valencia Limanı. Model o limana aşırı uyum sağlayabilir; rapora yazılmalı.
+**Kaggle ortamı**
 
-## 4. Kritik teknik sabitler
+1. `pip install -e` Kaggle'da **başarısız olur** → `--no-build-isolation` +
+   editable olmayan yedek + `site.addsitedir` ile `sys.path` tazeleme. Üçü de
+   gerekli, hücre 2'de var.
+2. Kaggle yüklenen zip'i **`<klasör>/<zip adı>/...` diye açar.** Keşif bu
+   yüzden klasör adına değil **işaret dosyasına** dayanır ve kökü ondan
+   **yukarı yürüyerek** bulur. Aksi halde üst klasör kaynak sanılır.
+3. Kaggle **248 baytı aşan arşiv girişini reddeder.**
+   `shorten_zip_names.py` düzeltir — kısaltma **taban ad bazında** yapılmalı,
+   yoksa görüntü/etiket eşleşmesi kırılır.
+4. Kaggle CLI: `kaggle.json` **okuma** için yeter, **yükleme** yeni token
+   ister (`kaggle auth login` veya `KAGGLE_API_TOKEN` / `~/.kaggle/access_token`).
+5. PowerShell 5.1 `Set-Content -Encoding utf8` **BOM ekler**; `kaggle.json`
+   BOM'lu olursa "Missing username" hatası verir.
+6. Kaggle kullanıcı adı: **`burakzorgeen`** (e-postadaki gibi `burakzorgecen`
+   değil).
 
-- Vitis AI docker: `xilinx/vitis-ai-pytorch-cpu:ubuntu2004-3.0.0.106` (`:latest`=3.5 yasak)
+**Veri**
+
+7. **Üç Roboflow kaynağının da bölmesi sızdırıyordu** — kare/augment kopyası
+   bazında bölünmüşler. Oturum bazlı yeniden bölme şart.
+8. **Ultralytics'e çevrilmiş VisDrone kopyaları kullanılamaz** —
+   ignored-region ve score=0 crowd bilgisi silinmiş, `annotations/` yerine
+   `labels/` var.
+9. **`tank` kelimesi geçen her sınıf askeri tank değil**: xView `Tank Car` =
+   demiryolu vagonu, `Storage Tank` = yakıt deposu.
+10. milrec ve mendeley görüntülerini 1, 2, 3 diye numaralamış — **aynı adlı
+    görüntüler farklı** (256 bit hash farkı 91-152). Grup anahtarı kaynak
+    önekli olmalı.
+
+**Kod**
+
+11. `argparse` `nargs="*"` ile **tekrarlanan bayraklar birbirini ezer** →
+    `action="append"`.
+12. VisDrone train ve val **aynı kaynak adını paylaşır ama farklı zip'lerdedir**
+    — arşivi kaynak adına göre eşlemek val görüntülerini train zip'inde aratır.
+13. Yol eşleştirmesi `"/images/" in name` ile yapılmamalı; arşiv kökü bir
+    seviye aşağıdaysa kaçırır → `has_part()` bileşen bazlı eşler.
+14. Kaynak yollarında boşluk var → notebook `build_dataset.py`'yi **kabuk
+    dizesiyle değil `subprocess` argüman listesiyle** çağırır.
+
+## 8. Kritik teknik sabitler
+
+- Vitis AI docker: `xilinx/vitis-ai-pytorch-cpu:ubuntu2004-3.0.0.106`
+  (`:latest` = 3.5 **yasak**)
 - YOLOX commit: `6ddff4824372906469a7fae2dc3206c7aa4bbaee`
-- Exp: ReLU + `DPUFocus`, **2 sınıf** (person/vehicle), **896×512 (16:9)**,
-  `max_labels` 1000/4000, 40 epoch
-- Çıktı kanalı = 5 + sınıf sayısı = **7** (eskiden 15 hardcode'du)
-- Dağıtım eşiği: `--conf 0.15` (recall odaklı)
-- Merkez: letterbox ters dönüşümünden **sonra** orijinal video koordinatlarında
-- INT8 kabul: `--float-map` zorunlu; drop > `0.02` → export yok; `accuracy_gate.json` şart
-- Golden: `--dump-first-frame` + `tools/verify_kv260_golden.py` (INT8 input HALF_UP + decode/NMS/cx,cy)
+- Model: YOLOX-Nano, ReLU (SiLU DPU'da yok), **DPUFocus** (strided-slice yerine
+  sabit one-hot conv; önceden eğitilmiş ağırlıklar geçerli kalır)
+- Çıktı kanalı = `5 + sınıf sayısı` = **7**
+- Graph **tam olarak 1 DPU subgraph** olmalı; CPU subgraph varsa derleme fail
+- INT8 kabul: `--float-map` zorunlu, mutlak AP kaybı > `0.02` → export yok
+- Golden: `--dump-first-frame` + `tools/verify_kv260_golden.py`
+- `centers.csv`: `frame,track_id,class_id,class_name,score,cx,cy`
 
-## 5. Önemli dosyalar
+**YOLOv8/v11 önerisi gelirse:** DFL kafası softmax kullanır, DPUCZDX8G'de
+CPU subgraph'ine düşer (Xilinx/Vitis-AI #904) ve tek-subgraph kapımızı ihlal
+eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 
+## 9. Sıradaki adımlar
+
+1. **Kaggle**: notebook'u import et → `aerial-vehicle-sources` bağla → GPU +
+   Internet aç → **hücre 1-6 çalıştır, dur**. Hücre 6 şunu basmalı:
+   `train 19476 / 205340`, `val 4483 / 21681`. Tutmazsa çıktıyı incele.
+2. Hücre 7 → 9 ile **eğitim** (~1,5-2 saat, 40 epoch).
+3. Hücre 11 değerlendirme → **sınıf bazlı AP'ye bak**. `sea_vehicle` için
+   train-val farkı büyükse 17 sahneye aşırı uyum var demektir.
+4. Hücre 13 → `yolox_aerial_artifacts.zip` indir.
+5. **VM**: `quantize/README.md`. `--inspect` ile kare olmayan girdinin tek DPU
+   subgraph'ine derlendiğini doğrula. VM'e val görüntüleri de lazım.
+6. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
+7. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı.
+8. **Rapor**: `docs/report_template.md`.
+
+## 10. Kullanıcıyla çalışma notları
+
+- **Türkçe** konuşur, Türkçe cevap bekler.
+- **Uzun mesajlarda kayboluyor.** Kısa, numaralı, tek eylemli adımlar verin.
+  "Neyi nasıl yapacağım anlamadım" dediyse mesaj uzun demektir.
+- Tahminle iş yapılmasından hoşlanmıyor; **ölçüm ve doğrulama** istiyor.
+  "tek hatada patlarız" dedi — sessiz hatalar en büyük risk.
+- **Overengineering'den kaçının** — açıkça söyledi.
+- Başka AI'lardan (ChatGPT, Gemini) öneri getiriyor. Bunlar soyut olarak doğru
+  ama bu projenin kısıtlarında yanlış çıktı (xView sınıfları, YOLOv8). Öneri
+  gelince **kaynağı doğrulayın**, hafızadan cevap vermeyin.
+- Amiri "YOLO lise seviyesi" demiş; projenin değeri model eğitmekte değil
+  **donanım-farkında dağıtımda** (DPUFocus, kuantalama kapıları, golden test).
+- Kimlik bilgisi paylaşmaya çalıştı — **API anahtarı/token işlemeyin**, kendisi
+  yapsın.
+
+## 11. Doğrulama komutları
+
+```bash
+python -m unittest discover -s tests          # 69 test (g++ varsa C++ dahil)
+python tools/audit_dataset.py --merged datasets/merged --data-dir datasets
+python tools/_sync_notebook_embeds.py         # notebook hucrelerini esitle
 ```
-C:\Users\emrez\proje\
-  README.md
-  HANDOFF_CLAUDE.md          ← bu dosya
-  tools/visdrone2coco.py         ← --classes 2 destegi
-  tools/tiling.py                ← dilimlenmis cikarim (spekulatif, yedek)
-  tools/verify_kv260_golden.py
-  tools/_sync_notebook_embeds.py
-  training/kaggle_visdrone_yolox.ipynb
-  training/exps/yolox_nano_visdrone.py
-  training/visdrone_eval.py      ← P/R/F1 + sinif gruplama senaryolari
-  training/eval_tiled.py         ← tam kare vs tiling karsilastirmasi
-  quantize/quantize_yolox.py
-  quantize/compile_kv260.sh
-  quantize/README.md
-  deploy/src/main.cpp
-  deploy/src/tracker.hpp         ← IoU + ByteTrack 2 asamali eslestirme
-  deploy/tests/test_tracker.cpp  ← 10 C++ testi
-  deploy/build.sh
-  deploy/CMakeLists.txt
-  deploy/README.md
-  docs/report_template.md
-  tests/                     ← 39 test (C++ tracker testleri dahil)
-```
 
-## 6. Sohbetten kalan kararlar / kısıtlar
-
-- Colab yok → **Kaggle**
-- WSL2 yok → **Oracle VM Ubuntu + Docker**
-- Deploy: **PetaLinux + VART C++**, video dosyası girişi
-- Plan dosyasını **kullanıcı izni olmadan düzenleme**
-- Commit yalnızca kullanıcı isterse
-- Frontend design kuralları bu projeyle ilgili değil
-
-## 7. Claude’a ilk mesaj şablonu
-
-Aşağıyı yeni Claude sohbetine yapıştır:
-
-```text
-KV260 + YOLOX-Nano + VisDrone projesine devam ediyoruz.
-
-Önce oku:
-1) C:\Users\emrez\proje\HANDOFF_CLAUDE.md
-2) C:\Users\emrez\proje\README.md
-3) C:\Users\emrez\.cursor\plans\kv260_yolox_visdrone_planı_b9133002.plan.md
-   (plan hedefi doğru ama HANDOFF'taki "güncellenmiş olanlar" tablosu planın üstündedir)
-
-Workspace: C:\Users\emrez\proje
-
-Durum: kod/testler hazır; sırada Kaggle eğitiminden başlayarak uçtan uca çalıştırma.
-Plan dosyasını iznim olmadan düzenleme.
-```
+Windows'ta `g++` PATH'te değilse C++ tracker testi atlanır:
+`C:\msys64\ucrt64\bin` ekleyin. Python: `C:\Users\emrez\AppData\Local\Python\bin\python.exe`.
