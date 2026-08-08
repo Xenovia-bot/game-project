@@ -41,6 +41,37 @@ Kod ve `README.md` planın üstündedir.
 | “tek DPU subgraph sayısı 1” yeter | Graph **yalnızca 1 DPU subgraph** olmalı; CPU subgraph olursa fail |
 | Kod iskeleti eksik | Repo uygulandı; review sonrası güvenlik kapıları eklendi |
 
+## 0. KILITLENMIS HEDEF (2026-08-08)
+
+Sistem **iki sinif** tespit edecek ve her tespitin merkez noktasini uretecek:
+
+| Sinif | Kapsam |
+| --- | --- |
+| `military_vehicle` | tank, zirhli arac, askeri kamyon |
+| `ship` | buyuk deniz araci |
+
+Kisitlar:
+
+- **Bakis acisi drone/ucak olmali** — havadan karaya veya havadan denize.
+  Uydu goruntusu (xView, DOTA, DIOR, HRSC) **kullanilmayacak**: 0.3 m GSD'de
+  7 m'lik bir tank ~23 piksele duser ve kacindigimiz kucuk-nesne problemine
+  geri donulur.
+- **Insan tespit edilmeyecek.** Ancak askeri veri setlerinde `soldier`/`people`
+  etiketli oldugu icin bunlar **ignore** olarak isaretlenecek; etiketsiz
+  birakilirsa model onlari arka plan olarak ogrenir ve bu tespiti bozar.
+- Buyuk nesne = kolay problem. VisDrone yayasi 896x512'de 5-14 px iken tank
+  19-37 px, buyuk gemi 93-467 px olur. Kullanicinin "%80 recall" hedefi bu
+  siniflarda gercekci hale gelir.
+
+### Terminoloji tuzagi (iki kez yasandi)
+
+`tank` kelimesi geçen her sinif askeri tank degildir:
+
+- xView `Tank Car` = demiryolu tanker vagonu
+- xView / DOTA `Storage Tank` = yakit deposu
+
+Veri seti secerken sinif listesi **resmi dokumandan** dogrulanmali.
+
 ## 3. Mevcut durum (2026-08-08)
 
 ### Tamamlanan: 10 sınıflı referans çalıştırma

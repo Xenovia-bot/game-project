@@ -13,6 +13,7 @@ tracker_test
 # Egitim / kuantalama / kart ciktilari (buyuk, uretilebilir)
 YOLOX_outputs/
 datasets/
+data/
 weights/
 artifacts/
 golden/
