@@ -278,8 +278,44 @@ ark.'nın MobileNetV2'yi kurtaran çözümü **per-channel** kuantalamaydı; bu
 donanımda mevcut değil.
 
 **Sonuç: kalibrasyonla düzeltilebilir bir sorun değil, mimari bir sınır.**
-Nano'yu kartta kullanmak isterseniz 0.23 AP kaybını bilinçli kabul etmeniz
-gerekir. Doğru hamle Tiny'dir.
+
+### 🎯 AMD'NİN KENDİ YOLOX-NANO'SU AYNI KAYBI VERİYOR
+
+Vitis AI 3.0 Model Zoo'da **`pt_yolox-nano_coco_416_416_1G_3.0`** var ve
+`zcu102 & zcu104 & kv260` için önceden derlenmiş xmodel içeriyor — yani tam
+bizim hedefimiz. Paketin `README.md`'sindeki resmi tablo:
+
+| Metric | Float | Quantized (PTQ) | **QAT** |
+| --- | --- | --- | --- |
+| AP0.50:0.95 | 0.220 | **0.136** | **0.210** |
+
+| | float → PTQ | göreli kayıp |
+| --- | --- | --- |
+| AMD (COCO, 416×416) | 0.220 → 0.136 | **%38,2** |
+| Bu proje (havadan, 896×512) | 0.5874 → 0.3568 | **%39,3** |
+
+**Bizim sonucumuz hatalı değil — vendor'ın yayınladığı sayıyla birebir aynı
+bantta.** YOLOX-Nano'nun DPUCZDX8G'de PTQ ile ~%38-39 kaybetmesi beklenen
+davranış.
+
+**AMD'nin çözümü Tiny'ye geçmek değil, QAT olmuş:** 0.136 → 0.210, yani
+float'ın %95'i. `code/run_qat.sh` 8 GPU + batch 128 kullanıyor; exp'leri
+`code/exps/example/custom/yolox_nano_deploy_relu_{q,qat}.py`. Paket ayrıca
+QAT ağırlıklarını (`qat/qat.pth`) ve PTQ sonucunu içeriyor — ama **COCO
+80 sınıf**, doğrudan kullanılamaz.
+
+**QAT bu projede yapılabilir mi? Donanım var (2026-08-09'da kontrol edildi):**
+
+| gereksinim | durum |
+| --- | --- |
+| NVIDIA GPU | ✅ RTX 4050 Laptop, 6 GB (Windows host) |
+| Docker Desktop + WSL2 | ✅ zaten kurulu |
+| Disk | ⚠️ C:'de 56,8 GB boş; Vitis AI GPU imajı büyük |
+| VRAM kısıtı | 6 GB → 896×512'de batch ~4-6 (AMD 8 GPU'da 128 kullandı) |
+
+**Sıralama:** önce Tiny (koşuyor, bedava), yetmezse QAT (vendor'ın kanıtlanmış
+yolu). Vitis AI 5.x **kullanılamaz**: kart imajı 3.0, 5.x ile derlenen xmodel
+yüklenmez; ayrıca 5.x Versal/NPU hedefliyor, DPUCZDX8G'yi değil.
 
 **Literatür ve vendor taraması (2026-08-09):**
 
