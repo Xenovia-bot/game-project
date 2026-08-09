@@ -179,7 +179,7 @@ deploy/src/tracker.hpp        IoU + ByteTrack 2 asamali eslestirme, sabit hiz.
                               VART/OpenCV BAGIMSIZ -> kart disinda test edilir
 deploy/tests/test_tracker.cpp 10 C++ testi
 
-tests/                        75 test. Calistirma:
+tests/                        69 test. Calistirma:
                               python -m unittest discover -s tests
 ```
 
@@ -301,7 +301,7 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 ## 11. Doğrulama komutları
 
 ```bash
-python -m unittest discover -s tests          # 75 test (g++ varsa C++ dahil)
+python -m unittest discover -s tests          # 69 test (g++ varsa C++ dahil)
 python tools/audit_dataset.py --merged datasets/merged --data-dir datasets
 python tools/_sync_notebook_embeds.py         # notebook hucrelerini esitle
 python tools/build_dataset.py --dry-run       # sayilar: 19476/205340, 4483/21681

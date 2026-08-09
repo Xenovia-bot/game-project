@@ -4,57 +4,18 @@
 AP hesabi resmi `calcAccuracy.m` ile birebir ayni: ignore GT'ler recall
 paydasinda kalir (`rec = tp/max(1,numel(gtMatch))`).
 
-Ek olarak, resmi protokolde bulunmayan iki tamamlayici cikti uretilir:
+Ek olarak, resmi protokolde bulunmayan bir tamamlayici cikti uretilir:
   * P/R/F1 (IoU 0.50) - sabit esikte ve en iyi F1 noktasinda. Yayinlanmis
     YOLO calismalariyla kiyaslanabilmesi icin bu metrigin recall paydasi
     ignore GT'leri **icermez**; AP'ninkinden farklidir, bilincli.
-  * Sinif gruplama - 10 ince sinifi 3 saha sinifina indirger. Eslestirme
-    hem GT'ye hem tespitlere uygulanir, yani `van`-`car` karisikligi
-    degerlendirme asamasinda ortadan kalkar; model yeniden egitilmez.
+
+Sinif semasi COCO kategorilerinden okunur; burada sabit bir sinif listesi
+yoktur. Sema `tools/build_dataset.py` tarafindan belirlenir.
 """
 
 from collections import defaultdict
 
 import numpy as np
-
-VISDRONE_CLASSES = (
-    "pedestrian", "people", "bicycle", "car", "van",
-    "truck", "tricycle", "awning-tricycle", "bus", "motor",
-)
-
-#: 10 ince VisDrone sinifi -> 3 saha sinifi. Sahada ayrilmasi anlamli olan
-#: gruplar korunur; 20 pikselde insanin bile ayiramadigi ayrimlar birlesir.
-GROUP_3 = {
-    1: 1, 2: 1,                  # pedestrian, people      -> person
-    3: 2, 7: 2, 8: 2, 10: 2,     # bicycle, tricycle,
-                                 # awning-tricycle, motor  -> two/three-wheeler
-    4: 3, 5: 3, 6: 3, 9: 3,      # car, van, truck, bus    -> vehicle
-}
-GROUP_3_NAMES = {1: "person", 2: "twowheeler", 3: "vehicle"}
-
-#: Hedef saha tanimi: person + vehicle. `vehicle` her turlu tasiti kapsar
-#: (bisiklet ve motosiklet dahil). Egitim de bu tanimla yapilir.
-GROUP_2 = {
-    1: 1, 2: 1,                                   # pedestrian, people -> person
-    3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 2,   # geri kalani -> vehicle
-}
-GROUP_2_NAMES = {1: "person", 2: "vehicle"}
-
-#: Tek sinifli tanimlar. Eslenmeyen kategoriler hem GT'den hem tespitlerden
-#: **dusurulur** (gruplanmaz): sistem o nesneleri hedeflemiyorsa onlari
-#: bulamamak da bulmak da puanlanmamalidir.
-PERSON_ONLY = {1: 1, 2: 1}
-VEHICLE_ONLY = {k: 1 for k in (3, 4, 5, 6, 7, 8, 9, 10)}
-
-#: Degerlendirme senaryolari: ad -> (kategori eslemesi, sinif adlari).
-#: `None` esleme resmi 10 sinifli protokol demektir.
-SCENARIOS = {
-    "10 sinif (resmi)": (None, None),
-    "2 sinif (hedef)": (GROUP_2, GROUP_2_NAMES),
-    "3 sinif (ara)": (GROUP_3, GROUP_3_NAMES),
-    "tek sinif: person": (PERSON_ONLY, {1: "person"}),
-    "tek sinif: vehicle": (VEHICLE_ONLY, {1: "vehicle"}),
-}
 
 #: En iyi F1 aramasinda taranan guven esikleri.
 SCORE_GRID = np.round(np.arange(0.0, 1.0001, 0.01), 4)
@@ -217,34 +178,36 @@ def _at_grid(index, precision, recall, f1):
     }
 
 
-def names_from_coco(coco, fallback_count=10):
+def names_from_coco(coco):
     """Sinif adlarini COCO kategorilerinden okur.
 
-    Boylece veri semasi degistiginde (10 sinif -> 2 sinif) tablolar
-    kendiliginden dogru kalir; ad listesi ikinci bir yerde tekrarlanmaz.
+    Boylece veri semasi degistiginde tablolar kendiliginden dogru kalir;
+    ad listesi ikinci bir yerde tekrarlanmaz.
     """
-    cats = getattr(coco, "cats", None)
-    if cats:
-        return {int(k): str(v.get("name", k)) for k, v in cats.items()}
-    return {i + 1: n for i, n in enumerate(VISDRONE_CLASSES[:fallback_count])}
+    cats = getattr(coco, "cats", None) or {}
+    return {int(k): str(v.get("name", k)) for k, v in cats.items()}
 
 
-def evaluate_visdrone(coco, detections, max_dets=500, group_map=None,
-                      class_names=None, score_thr=0.30, num_classes=None):
+def evaluate_visdrone(coco, detections, max_dets=500, score_thr=0.30,
+                      num_classes=None):
     """AP@[.50:.95], AP50, AP75 ve tamamlayici P/R/F1 degerlerini hesaplar.
 
-    `group_map` verilirse (ornegin `GROUP_3`), sinif kimlikleri hem GT'de hem
-    tespitlerde eslenerek degerlendirme gruplanmis siniflar uzerinde yapilir.
-    Model degismez; yalnizca olcum degisir.
+    `num_classes` verilmezse COCO kategori sayisindan okunur. Bu araligin
+    disindaki kategori kimlikleri hem GT'den hem tespitlerden dusurulur:
+    eski semali bir dosya sessizce yanlis sinifa yazilmasin.
     """
     prepared = prepare_detections(coco, detections, max_dets=max_dets)
     if num_classes is None:
-        num_classes = len(getattr(coco, "cats", None) or VISDRONE_CLASSES)
+        cats = getattr(coco, "cats", None)
+        if not cats:
+            raise ValueError(
+                "num_classes verilmedi ve COCO nesnesinde kategori yok; "
+                "sinif semasi belirlenemiyor."
+            )
+        num_classes = len(cats)
 
     def mapped(category_id):
-        if group_map is None:
-            return category_id if 1 <= category_id <= num_classes else None
-        return group_map.get(category_id)
+        return category_id if 1 <= category_id <= num_classes else None
 
     gt_by_image_class = defaultdict(list)
     dt_by_image_class = defaultdict(list)
@@ -304,21 +267,7 @@ def evaluate_visdrone(coco, detections, max_dets=500, group_map=None,
             aps.append(_voc_ap(recall, precision))
         per_class[category_id] = aps
 
-    names = dict(class_names or {})
-    if not names:
-        if group_map is None:
-            names = names_from_coco(coco, num_classes)
-        elif group_map == GROUP_2:
-            names = dict(GROUP_2_NAMES)
-        elif group_map == GROUP_3:
-            names = dict(GROUP_3_NAMES)
-        else:
-            # Bilinmeyen esleme: adi kaynak sinif adlarindan turet ki tablo
-            # "grup 1" gibi anlamsiz bir etiket gostermesin.
-            members = defaultdict(list)
-            for source, target in sorted(group_map.items()):
-                members[target].append(VISDRONE_CLASSES[source - 1])
-            names = {t: "+".join(v) for t, v in members.items()}
+    names = names_from_coco(coco)
 
     empty = {
         "ap": 0.0, "ap50": 0.0, "ap75": 0.0, "per_class": {},
@@ -366,43 +315,6 @@ def evaluate_visdrone(coco, detections, max_dets=500, group_map=None,
             for category_id, curve in curves.items()
         },
     }
-
-
-def evaluate_scenarios(coco, detections, max_dets=500, score_thr=0.30,
-                       scenarios=None):
-    """Ayni tespitleri birden cok sinif tanimiyla degerlendirir.
-
-    Model bir kez calisir, olcum dort farkli sekilde yapilir. Boylece "tek
-    sinifa inersem ne kazanirim" sorusu yeniden egitim yapmadan cevaplanir.
-    """
-    results = {}
-    for name, (group_map, class_names) in (scenarios or SCENARIOS).items():
-        results[name] = evaluate_visdrone(
-            coco, detections, max_dets=max_dets, group_map=group_map,
-            class_names=class_names, score_thr=score_thr,
-        )
-    return results
-
-
-def format_scenarios(results):
-    """Senaryo karsilastirma tablosunu tek metne cevirir."""
-    header = (
-        f"{'senaryo':<22}{'AP':>8}{'AP50':>8}{'AP75':>8}"
-        f"{'F1':>8}{'P':>8}{'R':>8}{'@conf':>7}"
-    )
-    lines = [header, "-" * len(header)]
-    for name, metrics in results.items():
-        best = metrics.get("f1_best")
-        if best is None:
-            lines.append(f"{name:<22}{'tespit yok':>47}")
-            continue
-        lines.append(
-            f"{name:<22}{metrics['ap']:>8.4f}{metrics['ap50']:>8.4f}"
-            f"{metrics['ap75']:>8.4f}{best['f1']:>8.4f}"
-            f"{best['precision']:>8.4f}{best['recall']:>8.4f}"
-            f"{best['score']:>7.2f}"
-        )
-    return "\n".join(lines)
 
 
 def format_metrics(metrics, title="VisDrone"):
