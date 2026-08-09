@@ -31,7 +31,7 @@ noktası:
 | Veri birleştirme | ✅ **bitti, doğrulandı** (19.476 train / 4.483 val) |
 | Kaggle eğitimi (2 sınıf) | ✅ **bitti** 2026-08-09 · 40/40 epoch · **4,9 saat** (T4) · AP@0.50 = **0.8659** |
 | Oracle VM · Vitis AI 3.0 PTQ | ⬜ **sıradaki iş** — `--float-map 0.5874` |
-| KV260 · C++ VART + golden test | ⬜ |
+| KV260 · C++ VART + golden test | ⬜ — **kart kurulumu ZATEN HAZIR** (aşağı bkz.) |
 | Rapor | ⬜ |
 
 ## 3. Veri seti (tamamlandı)
@@ -289,6 +289,21 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 3. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
 4. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı.
 5. **Rapor**: `docs/report_template.md` (§5'teki sayılar ve üç uyarı ile).
+
+## 9b. Kullanıcının hazır ortamı (2026-08-09'da öğrenildi)
+
+Kullanıcı **KV260'da daha önce YOLOv4-tiny çalıştırmış.** Yani:
+
+- PetaLinux/Vitis AI SD imajı **karta yazılmış ve çalışıyor** →
+  `deploy/README.md` adım 1-3 (imaj yazma, seri port, DPU doğrulama) atlanabilir.
+- VART çalışma zamanı kartta mevcut, kart üzerinde bir kez çıkarım yapılmış.
+- Vitis AI 3.0 "kurulu" diyor — **nerede olduğu netleştirilmeli**: kartın
+  üzerindeki çalışma zamanı mı, yoksa kuantalama/derleme için gereken Linux
+  docker'ı mı? YOLOv4-tiny genelde Model Zoo'dan **hazır derlenmiş** xmodel ile
+  çalıştırılır; bu durumda kuantalama ortamı **kurulmamış** olabilir.
+- **Doğrulanacak:** kartta `xdputil query` çıktısındaki DPU arch. Bizim derleme
+  `DPUCZDX8G/KV260/arch.json` (B4096) hedefliyor. Farklıysa xmodel yüklenmez
+  ("fingerprint mismatch") ve `compile_kv260.sh` içindeki `ARCH` değişmeli.
 
 ## 10. Kullanıcıyla çalışma notları
 
