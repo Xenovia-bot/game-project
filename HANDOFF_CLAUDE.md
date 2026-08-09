@@ -223,6 +223,26 @@ Notebook'u **elle düzenlemeyin**: `python build/make_notebook.py` sonra
 6. Kaggle kullanıcı adı: **`burakzorgeen`** (e-postadaki gibi `burakzorgecen`
    değil).
 
+**Vitis AI docker (2026-08-09'da ölçüldü)**
+
+6b. Ortam: **Python 3.7.12**, torch **1.12.1**, numpy **1.21.6**, cv2 4.7.0,
+    `pytorch_nndct` çalışıyor. Conda ortamları: `base`,
+    `vitis-ai-pytorch` ← **bunu aktive edin**, `vitis-ai-wego-torch`
+    (varsayılan aktif olan bu, yanlış olan da bu).
+6c. **YOLOX pinlenmiş commit'i Python 3.7'de import edilemiyor.**
+    `yolox/utils/mlflow_logger.py` → `import importlib.metadata` (3.8+).
+    Çözüm, `yolox/utils/__init__.py:14`'teki satırı yorum yapmak:
+    ```
+    sed -i 's/^from \.mlflow_logger import MlflowLogger/#&/' YOLOX/yolox/utils/__init__.py
+    ```
+    Güvenli: `MlflowLogger` yalnızca `yolox/core/trainer.py`'de kullanılıyor,
+    kuantalama trainer'ı hiç çağırmıyor. `verify_yolox_version` git commit'ine
+    baktığı için kimlik kontrolü de bozulmuyor.
+6d. Konteyneri `--rm` **olmadan** açın (`docker run -it --name vai ...`),
+    yoksa YOLOX kurulumu her çıkışta silinir. Geri giriş: `docker start -ai vai`.
+    Kurulum: `pip install --no-deps --no-build-isolation -e ./YOLOX`
+    (`--no-deps` şart: yoksa pip torch'u yükseltip ortamı bozar).
+
 **Veri**
 
 7. **Üç Roboflow kaynağının da bölmesi sızdırıyordu** — kare/augment kopyası
