@@ -441,6 +441,11 @@ def parse_args():
     p.add_argument("--deploy", action="store_true", help="xmodel export et")
     p.add_argument("--fast-finetune", action="store_true",
                    help="AdaQuant ile gelismis kalibrasyon (yavas ama daha isabetli)")
+    p.add_argument("--ft-images", type=int, default=100,
+                   help="AdaQuant'in onbellege alacagi goruntu sayisi. Modul "
+                        "basina maliyet bununla dogru orantili: 100 goruntu "
+                        "CPU'da ~8 saat, 32 goruntu ~2,5 saat. Az ornek "
+                        "AdaQuant'i bir miktar zayiflatir (varsayilan 100)")
     p.add_argument("--float-map", type=float, default=None,
                    help="Kaggle/float AP@500; INT8 kayip sinirini denetler")
     p.add_argument("--max-map-drop", type=float, default=0.02,
@@ -545,11 +550,13 @@ def main():
         calibrate(qmodel, calib_paths, input_size,
                   args.subset_len or 300, args.batch_size)
         if args.fast_finetune:
-            print("fast_finetune (AdaQuant) calisiyor; CPU'da uzun surebilir...")
+            print("fast_finetune (AdaQuant) calisiyor; CPU'da uzun surebilir.")
+            print("  onbellege alinacak goruntu: %d  (--ft-images ile degistirin;"
+                  " modul basina maliyet bununla dogru orantili)" % args.ft_images)
             quantizer.fast_finetune(
                 evaluate,
                 (qmodel, ann_val, val_dir, input_size, args.conf, args.nms,
-                 exp.num_classes, 100, "ft"),
+                 exp.num_classes, args.ft_images, "ft"),
             )
         quantizer.export_quant_config()
         print("Kalibrasyon tamamlandi:", out_dir)
