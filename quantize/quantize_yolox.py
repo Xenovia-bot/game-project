@@ -159,9 +159,22 @@ def load_exp(exp_file):
 class DeployModel(nn.Module):
     """YOLOX'un DPU'da kosacak kismi: backbone + FPN + head konvolusyonlari.
 
-    Cikti: her stride (8/16/32) icin ham [B, 4+1+num_classes, H, W] haritasi
-    (kanal sirasi: reg(4), obj(1), cls(num_classes)). Sigmoid ve grid cozumu
-    DPU disinda yapilir: bu scriptte decode(), kartta C++ uygulamasi.
+    Cikti: her stride (8/16/32) icin **ayri uc tensor** -- reg[B,4,H,W],
+    obj[B,1,H,W], cls[B,nc,H,W]. Toplam 9 cikti tensoru, sirasi
+    (reg,obj,cls) x (stride 8,16,32).
+
+    **Neden birlestirmiyoruz (2026-08-09'da olculdu):** onceki surum bu ucunu
+    `torch.cat` ile tek 7 kanalli tensore birlestiriyordu. Vitis AI'da concat
+    donanimda yalnizca bellek duzenidir ve tum girdilerin **ayni fix_point'i
+    paylasmasini** zorunlu kilar. Olculen float araliklar: reg +-2.9 iken obj
+    -76'ya kadar iniyor. Ortak olcek genise gore secilince (fix_point 2, adim
+    0.25) reg kanallari 256 seviyenin yalnizca ~16'sini kullanabiliyordu;
+    kutu merkezi stride 16'da 4 piksele, boyut hatasi %13'e ciktı ve INT8 AP
+    0.5874 -> 0.2987 dustu (AP75 %38'e). Ayri tensorlerde reg kendi dar
+    araligina gore olceklenir.
+
+    Sigmoid ve grid cozumu DPU disinda yapilir: bu scriptte decode(),
+    kartta C++ uygulamasi.
     """
 
     def __init__(self, model):
@@ -176,11 +189,9 @@ class DeployModel(nn.Module):
             xk = self.head.stems[k](feat)
             cls_feat = self.head.cls_convs[k](xk)
             reg_feat = self.head.reg_convs[k](xk)
-            outs.append(torch.cat([
-                self.head.reg_preds[k](reg_feat),
-                self.head.obj_preds[k](reg_feat),
-                self.head.cls_preds[k](cls_feat),
-            ], dim=1))
+            outs.append(self.head.reg_preds[k](reg_feat))
+            outs.append(self.head.obj_preds[k](reg_feat))
+            outs.append(self.head.cls_preds[k](cls_feat))
         return tuple(outs)
 
 
@@ -202,21 +213,32 @@ def letterbox(img, size):
 def decode(outputs, input_size):
     """Ham cikti haritalarini [B, N, 5+nc] kutulara cozer (girdi olceginde).
 
-    Kutu: (cx, cy, w, h); skorlar: sigmoid(obj), sigmoid(cls...).
+    `outputs` seviye basina **uc tensor** icerir: (reg, obj, cls) -- bkz.
+    DeployModel. Kutu: (cx, cy, w, h); skorlar: sigmoid(obj), sigmoid(cls...).
     """
+    if len(outputs) % 3:
+        raise ValueError(
+            "Cikti sayisi 3'un kati olmali (seviye basina reg/obj/cls); "
+            "bulunan: %d" % len(outputs)
+        )
     flat = []
-    for out in outputs:
-        b, c, hh, ww = out.shape
+    for index in range(0, len(outputs), 3):
+        reg, obj, cls = outputs[index:index + 3]
+        b, _, hh, ww = reg.shape
         stride = input_size[0] / hh
         try:
             yv, xv = torch.meshgrid(torch.arange(hh), torch.arange(ww), indexing="ij")
         except TypeError:  # eski torch surumleri
             yv, xv = torch.meshgrid(torch.arange(hh), torch.arange(ww))
         grid = torch.stack((xv, yv), 2).reshape(1, hh * ww, 2).float()
-        o = out.permute(0, 2, 3, 1).reshape(b, hh * ww, c)
-        xy = (o[..., 0:2] + grid) * stride
-        wh = torch.exp(o[..., 2:4]) * stride
-        scores = torch.sigmoid(o[..., 4:])
+
+        def flatten(tensor):
+            return tensor.permute(0, 2, 3, 1).reshape(b, hh * ww, -1)
+
+        r = flatten(reg)
+        xy = (r[..., 0:2] + grid) * stride
+        wh = torch.exp(r[..., 2:4]) * stride
+        scores = torch.sigmoid(torch.cat([flatten(obj), flatten(cls)], dim=-1))
         flat.append(torch.cat([xy, wh, scores], dim=-1))
     return torch.cat(flat, dim=1)
 
