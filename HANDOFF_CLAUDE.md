@@ -312,9 +312,18 @@ Kullanıcı **KV260'da daha önce YOLOv4-tiny çalıştırmış.** Yani:
   üzerindeki çalışma zamanı mı, yoksa kuantalama/derleme için gereken Linux
   docker'ı mı? YOLOv4-tiny genelde Model Zoo'dan **hazır derlenmiş** xmodel ile
   çalıştırılır; bu durumda kuantalama ortamı **kurulmamış** olabilir.
-- **Doğrulanacak:** kartta `xdputil query` çıktısındaki DPU arch. Bizim derleme
-  `DPUCZDX8G/KV260/arch.json` (B4096) hedefliyor. Farklıysa xmodel yüklenmez
-  ("fingerprint mismatch") ve `compile_kv260.sh` içindeki `ARCH` değişmeli.
+- **Kart Vitis AI 3.0** — kullanıcı 2026-08-09'da açıkça doğruladı ("kart 3.0
+  eminim"). Projedeki 3.0 sabiti doğru. (4 Ağustos'taki bir oturumda "vitis
+  3.5" geçiyor; o Model Zoo tarafıyla ilgiliydi, kartla değil.)
+- **B4096 hâlâ ÖLÇÜLMEDİ.** Kullanıcının hatırlaması ve KV260 hazır imajının
+  varsayılanı bu yönde; geçmiş oturumlarda `xdputil query` çıktısı yok.
+  **Ama bu pahalı adımları bloklamaz:** DPU mimarisi yalnızca
+  `compile_kv260.sh` içindeki `vai_c_xir -a .../KV260/arch.json` adımına
+  giriyor (dakikalar). Kalibrasyon, INT8 AP testi ve `--deploy` export'u
+  mimariden bağımsızdır. Yanlış çıkarsa yalnızca son adım tekrarlanır.
+  Ayrıca üç yerde sert kapı var: `compile_kv260.sh` subgraph/kanal kontrolü,
+  `main.cpp` başlangıç doğrulaması ve kartın `fingerprint mismatch` hatası —
+  sessizce yanlış çalışma ihtimali yok.
 
 ## 10. Kullanıcıyla çalışma notları
 
