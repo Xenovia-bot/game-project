@@ -30,7 +30,7 @@ noktası:
 | --- | --- |
 | Veri birleştirme | ✅ **bitti, doğrulandı** (19.476 train / 4.483 val) |
 | Kaggle eğitimi (2 sınıf) | ✅ **bitti** 2026-08-09 · 40/40 epoch · **4,9 saat** (T4) · AP@0.50 = **0.8659** |
-| Oracle VM · Vitis AI 3.0 PTQ | ⬜ **sıradaki iş** — `--float-map 0.5874` |
+| Oracle VM · Vitis AI 3.0 PTQ | 🔵 **başladı** — `--inspect` ✅ geçti (aşağı bkz.), sırada float AP |
 | KV260 · C++ VART + golden test | ⬜ — **kart kurulumu ZATEN HAZIR** (aşağı bkz.) |
 | Rapor | ⬜ |
 
@@ -116,6 +116,28 @@ verir ve ~1,2 saat kazandırır.
 > VisDrone; (3) `sea_vehicle` 0.95'i tek limanın ezberlenmesi
 > (bkz. §4). `land_vehicle` 0.78 nispeten gerçek: val land kutularının
 > %91'i VisDrone'dan. Raporda bu üç uyarı mutlaka yer almalı.
+
+### ✅ DPU UYUMLULUK KAPISI GEÇTİ — 2026-08-09, Vitis AI 3.0 Inspector
+
+`python quantize_yolox.py --inspect`, hedef `DPUCZDX8G_ISA1_B4096`:
+
+```
+[VAIQ_NOTE]: All the operators are assigned to the DPU
+```
+
+Doğrulanan üç iddia:
+
+1. **DPUFocus çalışıyor.** `DPUFocus[stem]/Conv2d[space_to_depth]` →
+   `nndct_conv2d`, çıktı `[1, 256, 448, 12]` — **DPU'ya atandı**. Orijinal
+   Focus'un strided-slice'ı atanmazdı; projenin temel tasarım kararı buydu.
+2. **Üç baş çıktısı da 7 kanallı** (`5 + 2 sınıf`): `[1,64,112,7]`,
+   `[1,32,56,7]`, `[1,16,28,7]` → 512/64=8, 512/32=16, 512/16=32, yani
+   **stride 8/16/32 doğru**. Kare olmayan 896×512 girdi sorun çıkarmadı.
+3. **Checkpoint torch 1.12'de açıldı**: `Checkpoint tam eslesti: 643/643
+   katman`. Kaggle torch 2.10 ile kaydetmişti; biçim uyumu tutmuş.
+
+CPU'ya düşen tek bir op yok — maxpool, resize (upsample), concat, elemwise_add
+dahil hepsi DPU'da. Ayrıntı: `build/quant/inspect/inspect_DPUCZDX8G_ISA1_B4096.txt`
 
 **Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07
 (farklı görev ve farklı veri; yalnızca bağlam için):
