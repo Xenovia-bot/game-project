@@ -271,6 +271,21 @@ def postprocess_frame(pred, conf_thr, nms_thr):
     return dets
 
 
+def select_subset(img_ids, subset_len):
+    """Alt kumeyi bastan degil, listeye **esit araliklarla yayarak** secer.
+
+    Bastan almak temsili degil: birlestirilmis sette image_id'ler dosya adina
+    gore atandigi icin ilk N goruntunun tamami tek kaynaktan gelir. `mendeley`
+    alfabetik olarak once geldiginden ve val'inin %85'i bos oldugundan,
+    `--subset-len 50` sifir GT kutusu iceren 50 goruntu secip AP=0 uretiyordu
+    (2026-08-09'da yasandi). Esit aralikli secim dort kaynagi da kapsar.
+    """
+    if not subset_len or subset_len >= len(img_ids):
+        return img_ids
+    step = len(img_ids) / subset_len
+    return [img_ids[int(i * step)] for i in range(subset_len)]
+
+
 def evaluate(run_model, ann_file, img_dir, input_size, conf_thr, nms_thr,
              num_classes, subset_len=None, tag=""):
     """Resmi VisDrone DET tarzi AP@500; fast_finetune metrigi."""
@@ -278,9 +293,7 @@ def evaluate(run_model, ann_file, img_dir, input_size, conf_thr, nms_thr,
     from visdrone_eval import evaluate_visdrone
 
     coco_gt = COCO(str(ann_file))
-    img_ids = sorted(coco_gt.getImgIds())
-    if subset_len:
-        img_ids = img_ids[:subset_len]
+    img_ids = select_subset(sorted(coco_gt.getImgIds()), subset_len)
 
     results = []
     t0 = time.time()
