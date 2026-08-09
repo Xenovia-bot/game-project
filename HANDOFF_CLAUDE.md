@@ -37,16 +37,49 @@ noktası:
 hiç kazandırmadı (§5). Sorun kalibrasyonda değil, depthwise conv'ların
 per-tensor 8 bitte temsil edilemiyor olmasında.
 
-**Sıradaki:** Tiny eğitimi bitince aynı VM adımlarını Tiny için tekrarla —
-`--inspect` → float AP → calib → test. Depthwise olmadığı için kaybın çok
-daha düşük olması bekleniyor. Geçerse derle ve karta gönder.
+**Ama bu bir başarısızlık değil:** AMD'nin kendi YOLOX-Nano'su aynı DPU'da
+PTQ ile %38,2 kaybediyor, bizimki %39,3 (§5). Vendor sayısıyla birebir aynı
+bantta.
 
-**Tiny de geçmezse** (ya da FPS bütçesine sığmazsa) bilinçli karar: Nano'nun
-INT8'ini 0.23 kayıpla kabul edip raporda gerekçesiyle yazmak. Ölçüm zaten
-elde — bu bir eksiklik değil, belgelenmiş bir mühendislik sınırı.
+### Sıradaki üç yol (öncelik sırasıyla)
 
-**Kod tarafında bekleyen iş yok** — dağıtım zinciri 9 tensörlü çıktıya taşındı
-(`main.cpp`, `compile_kv260.sh`, `verify_kv260_golden.py`), 74 test geçiyor.
+**1. YOLOX-Tiny — koşuyor, bedava.** Kaggle'da eğitim bitince artifacts'ı VM'e
+taşı ve aynı adımları tekrarla:
+```
+export ARGS="--exp-file yolox_tiny_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/merged"
+python quantize_yolox.py --inspect $ARGS
+python quantize_yolox.py --quant-mode float $ARGS          # float AP'yi not et
+python quantize_yolox.py --quant-mode calib --subset-len 300 --calib-dir calib_images $ARGS
+python quantize_yolox.py --quant-mode test --float-map <FLOAT_AP> $ARGS
+```
+**AdaQuant'a gerek yok** — Nano'da hiç kazandırmadığı ölçüldü. Tiny'de
+belirleyici olan kalibrasyon değil mimari (depthwise yok).
+⚠️ ~5M parametre → **30 FPS bütçesi kartta yeniden ölçülmeli.**
+
+**2. QAT — vendor'ın kanıtlanmış yolu, donanım var.** AMD'de 0.136 → 0.210
+(%95 geri kazanım). Gereken her şey mevcut: RTX 4050 (6 GB), Docker Desktop +
+WSL2 kurulu, 56,8 GB boş disk. Vitis AI **GPU** docker'ı çekilip
+`W_QUANT=1` ile QAT yapılır; AMD'nin exp'leri Model Zoo paketinde
+(`code/exps/example/custom/yolox_nano_deploy_relu_qat.py`, `code/run_qat.sh`).
+Kısıt: 6 GB VRAM → 896×512'de batch ~4-6.
+
+**3. Kaybı bilinçli kabul et.** Nano INT8'i 0.3568 ile kullan, rapora
+gerekçesiyle yaz. Ölçüm ve vendor karşılaştırması zaten elde — bu bir
+eksiklik değil, belgelenmiş bir mühendislik sınırı.
+
+**Kod tarafında bekleyen iş yok.** Dağıtım zinciri 9 tensörlü çıktıya taşındı:
+
+- `DeployModel` reg/obj/cls'yi **ayrı** döndürüyor (concat, Vitis AI'da
+  hepsini aynı `fix_point`'e zorluyordu — §5).
+- `main.cpp` 9 tensörü **sıraya güvenmeden** okuyor: uzamsal boyuta göre
+  gruplayıp rolü kanal sayısından tanıyor (4=reg, 1=obj, 2=cls). VART çıktı
+  sırasını garanti etmiyor; Xilinx'in kendi VART örneklerinde de bu yüzden
+  açık bir `output_mapping` tutuluyor.
+- `compile_kv260.sh` 9 çıktı bekliyor, her seviyede reg/obj/cls'nin tam
+  olduğunu doğruluyor.
+- `verify_kv260_golden.py` her rolün kendi ölçeğini kullanıyor.
+- **74 test geçiyor.** `main.cpp` yerelde derlenemiyor (VART/OpenCV başlıkları
+  yok) — ilk gerçek derleme kartta olacak.
 
 ## 2. Zincir ve nerede olduğumuz
 
@@ -314,8 +347,29 @@ QAT ağırlıklarını (`qat/qat.pth`) ve PTQ sonucunu içeriyor — ama **COCO
 | VRAM kısıtı | 6 GB → 896×512'de batch ~4-6 (AMD 8 GPU'da 128 kullandı) |
 
 **Sıralama:** önce Tiny (koşuyor, bedava), yetmezse QAT (vendor'ın kanıtlanmış
-yolu). Vitis AI 5.x **kullanılamaz**: kart imajı 3.0, 5.x ile derlenen xmodel
-yüklenmez; ayrıca 5.x Versal/NPU hedefliyor, DPUCZDX8G'yi değil.
+yolu).
+
+### ⛔ Vitis AI sürüm tavanı: 3.0'da kalıyoruz (ölçüldü)
+
+`board_setup/` klasörünün içeriği, GitHub API ile sürüm sürüm karşılaştırıldı:
+
+| Vitis AI | `board_setup/` |
+| --- | --- |
+| **3.0** | **mpsoc**, vck190, vck5000 |
+| master (5.x) | yalnızca **vck190** |
+
+**MPSoC (Zynq UltraScale+ = KV260) desteği yeni sürümlerde kaldırılmış.**
+Yani "AMD 5.x için KV260 imajı sağlamamış" değil — **çip artık desteklenmiyor.**
+
+Bunun iki sonucu:
+1. **Vitis AI 5.x modeli kullanılamaz.** Kart imajı 3.0; 5.x ile derlenen
+   xmodel `fingerprint mismatch` verir. Ayrıca 5.x'te derleyecek MPSoC
+   hedefi yok.
+2. **Kendi SD imajını üretmek işe yaramaz.** Teknik olarak mümkün (Vivado +
+   Vitis + PetaLinux + DPU-TRD, ~150 GB araç ve saatlerce derleme) ama daha
+   yeni Vitis AI kazandırmaz, B4096 zaten KV260'ın en büyük DPU'su ve
+   kuantalama kaybı imaj sorunu değil. **Kartın imajı doğru sabit; değişkenler
+   mimari, eğitim yöntemi ve kabul edilen kayıp.**
 
 **Literatür ve vendor taraması (2026-08-09):**
 
