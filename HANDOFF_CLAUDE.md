@@ -208,8 +208,16 @@ Notebook'u **elle düzenlemeyin**: `python build/make_notebook.py` sonra
 3. Kaggle **248 baytı aşan arşiv girişini reddeder.**
    `shorten_zip_names.py` düzeltir — kısaltma **taban ad bazında** yapılmalı,
    yoksa görüntü/etiket eşleşmesi kırılır.
-4. Kaggle CLI: `kaggle.json` **okuma** için yeter, **yükleme** yeni token
-   ister (`kaggle auth login` veya `KAGGLE_API_TOKEN` / `~/.kaggle/access_token`).
+4. Kaggle CLI: `kaggle.json` **artık hesaba bağlı hiçbir işlem için yetmiyor**
+   (2026-08-09'da ölçüldü — eski not "okuma için yeter" diyordu, **yanlış**).
+   Anonim/genel okumalar çalışıyor (`datasets list --user ...`), ama kimliğe
+   bağlı komutlar — `kernels list -m`, `kernels files`, `kernels output` —
+   `Authentication required` veriyor. Çözüm: `kaggle auth login` (tarayıcı
+   OAuth, token kopyalamak yok) ya da `KAGGLE_API_TOKEN` /
+   `~/.kaggle/access_token`. **Bu adımı kullanıcı kendisi yapar; token/anahtar
+   işlemeyin.** Ayrıca Kaggle'ın indirdiği log dosyasının adı (`notebook…`)
+   URL slug'ı ile aynı olmayabilir; doğru slug `kaggle kernels list -m`
+   çıktısında veya `kaggle.com/code/<kullanici>/<slug>` adresinde.
 5. PowerShell 5.1 `Set-Content -Encoding utf8` **BOM ekler**; `kaggle.json`
    BOM'lu olursa "Missing username" hatası verir.
 6. Kaggle kullanıcı adı: **`burakzorgeen`** (e-postadaki gibi `burakzorgecen`
