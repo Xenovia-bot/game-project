@@ -37,13 +37,29 @@ noktasi (cx, cy) uretilir; model KV260 DPU'suna (DPUCZDX8G) derlenir.
 Ayarlar: **Accelerator = GPU**, **Internet = On**.
 """))
 
-CELLS.append(code("""import os
+CELLS.append(code('''import os
 from pathlib import Path
 
 WORK = "/kaggle/working" if os.path.isdir("/kaggle/working") else os.getcwd()
 %cd {WORK}
 !nvidia-smi
-"""))
+
+# ============================ VARYANT SECIMI ============================
+# "nano" : depthwise conv kullanir, 0.9M parametre, hizli.
+# "tiny" : depthwise YOK, ~5M parametre. INT8 kuantalamaya cok daha uygun --
+#          Nano'da INT8 kaybi 0.2285 olculdu ve kok neden depthwise conv'larin
+#          per-tensor kuantalanmasiydi (bkz. HANDOFF). Bedeli: DPU suresi
+#          artar, 30 FPS butcesi kartta yeniden olculmelidir.
+VARIANT = "nano"        # <-- Tiny egitmek icin "tiny" yapin
+# ========================================================================
+
+EXP_FILE = f"yolox_{VARIANT}_visdrone.py"
+INIT_URL = ("https://github.com/Megvii-BaseDetection/YOLOX/releases/download/"
+            f"0.1.1rc0/yolox_{VARIANT}.pth")
+print("varyant :", VARIANT)
+print("exp     :", EXP_FILE)
+print("baslangic agirligi:", INIT_URL.rsplit("/", 1)[-1])
+'''))
 
 CELLS.append(code('''# YOLOX kurulumu (Kaggle'daki hazir torch surumune dokunmadan).
 # Kaggle ve Vitis AI VM ayni commit'i kullanir; main dali kullanilmaz.
@@ -104,10 +120,12 @@ import yolox
 print("yolox:", yolox.__version__, "|", yolox.__file__)
 '''))
 
-# 3, 4, 5 -> %%writefile (sync doldurur)
+# 3, 4, 5, 6 -> %%writefile (tools/_sync_notebook_embeds.py doldurur)
 CELLS.append(code("%%writefile build_dataset.py\n"))
 CELLS.append(code("%%writefile visdrone_eval.py\n"))
 CELLS.append(code("%%writefile yolox_nano_visdrone.py\n"))
+# Tiny, Nano'yu devraldigi icin VARIANT ne olursa olsun ikisi de yazilmali.
+CELLS.append(code("%%writefile yolox_tiny_visdrone.py\n"))
 
 CELLS.append(code("""# Bagli veri setlerini bul ve tek bir 2-sinifli COCO'ya birlestir.
 #
@@ -230,17 +248,14 @@ import urllib.request
 WDIR = Path(WORK) / "weights"
 WDIR.mkdir(exist_ok=True)
 
-spec = importlib.util.spec_from_file_location("exp_mod", "yolox_nano_visdrone.py")
+spec = importlib.util.spec_from_file_location("exp_mod", EXP_FILE)
 exp_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(exp_mod)
 ref_state = exp_mod.Exp().get_model().state_dict()
 
-mg = WDIR / "yolox_nano.pth"
+mg = WDIR / INIT_URL.rsplit("/", 1)[-1]
 if not mg.exists():
-    urllib.request.urlretrieve(
-        "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.pth",
-        mg,
-    )
+    urllib.request.urlretrieve(INIT_URL, mg)
 
 # PyTorch 2.6+ varsayilani weights_only=True, Vitis AI 3.0/PyTorch 1.12 ise
 # bu parametreyi tanimaz. Iki ortamda da acik ve guvenilir yerel ckpt yukle.
@@ -287,7 +302,7 @@ CELLS.append(code('''# 2 sinif (land_vehicle / sea_vehicle), girdi 896x512 (16:9
 BATCH = 16  # OOM olursa 8 yapin
 
 %cd {WORK}
-!python YOLOX/tools/train.py -f yolox_nano_visdrone.py -d 1 -b {BATCH} --fp16 -c weights/init_ckpt.pth
+!python YOLOX/tools/train.py -f {EXP_FILE} -d 1 -b {BATCH} --fp16 -c weights/init_ckpt.pth
 '''))
 
 CELLS.append(code('''# Devam (resume): onceki oturumun Output'unu bu oturuma input olarak
@@ -295,7 +310,7 @@ CELLS.append(code('''# Devam (resume): onceki oturumun Output'unu bu oturuma inp
 RESUME_CKPT = ""  # or. "/kaggle/input/ONCEKI/YOLOX_outputs/yolox_nano_visdrone/latest_ckpt.pth"
 
 if RESUME_CKPT:
-    !python YOLOX/tools/train.py -f yolox_nano_visdrone.py -d 1 -b {BATCH} --fp16 --resume -c "{RESUME_CKPT}"
+    !python YOLOX/tools/train.py -f {EXP_FILE} -d 1 -b {BATCH} --fp16 --resume -c "{RESUME_CKPT}"
 else:
     print("RESUME_CKPT bos; bu hucre yalnizca yarim kalan egitimi surdurmek icin.")
 '''))
@@ -307,7 +322,7 @@ CELLS.append(code('''# Degerlendirme: resmi VisDrone ignore filtresi + global to
 
 def find_best_ckpt():
     """Bu oturumda egitildiyse yerelden, aksi halde bagli input'tan alir."""
-    local = Path("YOLOX_outputs/yolox_nano_visdrone/best_ckpt.pth")
+    local = Path(f"YOLOX_outputs/{Path(EXP_FILE).stem}/best_ckpt.pth")
     if local.exists():
         return local
     if INPUT.exists():
@@ -321,7 +336,7 @@ def find_best_ckpt():
 
 BEST_CKPT = str(find_best_ckpt())
 print("checkpoint:", BEST_CKPT)
-!python YOLOX/tools/eval.py -f yolox_nano_visdrone.py -c "{BEST_CKPT}" -d 1 -b 16 --conf 0.001
+!python YOLOX/tools/eval.py -f {EXP_FILE} -c "{BEST_CKPT}" -d 1 -b 16 --conf 0.001
 '''))
 
 CELLS.append(code('''# Gorsel kontrol: kutular + MERKEZ NOKTALARI (cx, cy)
@@ -335,7 +350,7 @@ import matplotlib.pyplot as plt
 from yolox.data.data_augment import ValTransform
 from yolox.utils import postprocess
 
-spec2 = importlib.util.spec_from_file_location("exp_mod2", "yolox_nano_visdrone.py")
+spec2 = importlib.util.spec_from_file_location("exp_mod2", EXP_FILE)
 exp_mod2 = importlib.util.module_from_spec(spec2)
 spec2.loader.exec_module(exp_mod2)
 exp = exp_mod2.Exp()
@@ -400,13 +415,18 @@ import shutil
 ART = Path(WORK) / "artifacts"
 ART.mkdir(exist_ok=True)
 shutil.copy(BEST_CKPT, ART / "best_ckpt.pth")
-for _name in ("yolox_nano_visdrone.py", "visdrone_eval.py", "build_dataset.py"):
+for _name in ("yolox_nano_visdrone.py", "yolox_tiny_visdrone.py",
+              "visdrone_eval.py", "build_dataset.py"):
     shutil.copy(_name, ART / _name)
 # Kuantalama ayni val setiyle olculmeli: anotasyonu da tasi
 shutil.copy(DATASET_DIR / "annotations" / "instances_val.json",
             ART / "instances_val.json")
 (ART / "classes.txt").write_text("\\n".join(CLASSES))
 (ART / "YOLOX_COMMIT.txt").write_text(YOLOX_COMMIT + "\\n")
+# Hangi varyantin egitildigi artifact icinde yazili olsun: VM'de yanlis exp
+# dosyasiyla kuantalamak sessiz bir hata olurdu.
+(ART / "VARIANT.txt").write_text(VARIANT + "\\n")
+(ART / "EXP_FILE.txt").write_text(EXP_FILE + "\\n")
 zip_path = shutil.make_archive(str(Path(WORK) / "yolox_aerial_artifacts"),
                                "zip", ART)
 print("Hazir:", zip_path)

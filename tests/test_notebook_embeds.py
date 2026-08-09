@@ -102,17 +102,29 @@ class NotebookEmbedTests(unittest.TestCase):
 
 
 class DatasetDiscoveryTests(unittest.TestCase):
-    """Notebook hucresi 6, kaynaklari klasor adina degil ICERIGE gore bulmali.
+    """Veri kesif hucresi, kaynaklari klasor adina degil ICERIGE gore bulmali.
 
     Kaggle'a manuel yuklemede klasor adlari degisir ve Kaggle zip'leri acabilir.
     Ada bagli bir arama bu durumda kaynagi bulamaz ve kullanici saatlerce yol
     hatasiyla ugrasir.
     """
 
+    def _discover_cell(self, notebook):
+        """Hucreyi indeksle degil ICERIGIYLE bulur.
+
+        Indeks sabitlemek kirilgan: notebook'a bir %%writefile hucresi
+        eklenince (ornegin Tiny varyanti) sonraki tum indeksler kayiyor.
+        """
+        for cell in notebook["cells"]:
+            source = "".join(cell["source"])
+            if "SOURCES = discover()" in source:
+                return source
+        raise AssertionError("Veri kesif hucresi bulunamadi")
+
     def _discover_from_notebook(self, input_root):
         import re
         notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
-        source = "".join(notebook["cells"][6]["source"])
+        source = self._discover_cell(notebook)
         source = re.sub(r"^!.*$", "# shell", source, flags=re.M)
         body = source.split("SOURCES = discover()")[0]
         body = body.replace('INPUT = Path("/kaggle/input")',

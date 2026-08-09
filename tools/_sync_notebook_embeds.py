@@ -11,11 +11,13 @@ EMBEDS = {
     3: ROOT / "tools" / "build_dataset.py",
     4: ROOT / "training" / "visdrone_eval.py",
     5: ROOT / "training" / "exps" / "yolox_nano_visdrone.py",
+    6: ROOT / "training" / "exps" / "yolox_tiny_visdrone.py",
 }
 
 
 def with_notebook_note(path: Path, body: str) -> str:
-    if path.name not in {"build_dataset.py", "yolox_nano_visdrone.py"}:
+    if path.name not in {"build_dataset.py", "yolox_nano_visdrone.py",
+                         "yolox_tiny_visdrone.py"}:
         return body
     if not body.startswith('"""'):
         return body

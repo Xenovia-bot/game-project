@@ -175,6 +175,10 @@ class Exp(MyExp):
         self.width = 0.25
         self.act = "relu"
         self.num_classes = len(TARGET_CLASSES)
+        # Nano, depthwise-ayrilabilir conv kullanan tek YOLOX varyantidir.
+        # Ayri bir oznitelik olarak duruyor ki Tiny turevi (depthwise=False)
+        # bu dosyayi devralip yalnizca iki satiri degistirebilsin.
+        self.depthwise = True
 
         # ---- girdi boyutu: kaynak videonun en-boy oranina uydurulmus ----
         # 1920x1080'i 640x640'a letterbox etmek kanvasin %44'unu gri dolguya
@@ -235,14 +239,13 @@ class Exp(MyExp):
             from yolox.models import YOLOX, YOLOPAFPN, YOLOXHead
 
             in_channels = [256, 512, 1024]
-            # Nano: depthwise=True
             backbone = YOLOPAFPN(
                 self.depth, self.width, in_channels=in_channels,
-                act=self.act, depthwise=True,
+                act=self.act, depthwise=self.depthwise,
             )
             head = YOLOXHead(
                 self.num_classes, self.width, in_channels=in_channels,
-                act=self.act, depthwise=True,
+                act=self.act, depthwise=self.depthwise,
             )
             self.model = YOLOX(backbone, head)
             # DPU: slice tabanli Focus stem'i esdeger conv surumuyle degistir
