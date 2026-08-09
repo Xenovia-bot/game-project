@@ -28,15 +28,22 @@ noktası:
 
 **İki iş paralel koşuyor:**
 
-| nerede | ne | süre | ne bekleniyor |
-| --- | --- | --- | --- |
-| VM docker | Nano · AdaQuant kalibrasyonu (`--ft-images 32`) + INT8 testi | ~3,2 sa | `AP kaybi:` satırı. Kayıp 0,02'yi geçerse export yok |
-| Kaggle | **Tiny** eğitimi (`VARIANT = "tiny"`, 40 epoch) | ~5 sa | float AP ve `yolox_aerial_artifacts.zip` |
+| nerede | ne | durum |
+| --- | --- | --- |
+| VM docker | Nano · PTQ merdiveninin tamamı | ✅ **bitti — kapı geçilmedi, kayıp 0.2306** |
+| Kaggle | **Tiny** eğitimi (`VARIANT = "tiny"`, 40 epoch) | 🔵 koşuyor, ~5 sa |
 
-**Sonra karar noktası:** Nano AdaQuant ile kapıyı geçerse Nano'yla devam;
-geçmezse Tiny'nin INT8'ini ölçüp karşılaştırırız. Tiny'de depthwise conv
-olmadığı için kuantalamanın çok daha iyi olması bekleniyor, ama ~5M parametre
-olduğu için **30 FPS bütçesi kartta yeniden ölçülmeli.**
+**Nano kapandı.** CLE + bias correction + AdaQuant hepsi uygulandı, AdaQuant
+hiç kazandırmadı (§5). Sorun kalibrasyonda değil, depthwise conv'ların
+per-tensor 8 bitte temsil edilemiyor olmasında.
+
+**Sıradaki:** Tiny eğitimi bitince aynı VM adımlarını Tiny için tekrarla —
+`--inspect` → float AP → calib → test. Depthwise olmadığı için kaybın çok
+daha düşük olması bekleniyor. Geçerse derle ve karta gönder.
+
+**Tiny de geçmezse** (ya da FPS bütçesine sığmazsa) bilinçli karar: Nano'nun
+INT8'ini 0.23 kayıpla kabul edip raporda gerekçesiyle yazmak. Ölçüm zaten
+elde — bu bir eksiklik değil, belgelenmiş bir mühendislik sınırı.
 
 **Kod tarafında bekleyen iş yok** — dağıtım zinciri 9 tensörlü çıktıya taşındı
 (`main.cpp`, `compile_kv260.sh`, `verify_kv260_golden.py`), 74 test geçiyor.
@@ -246,9 +253,33 @@ equalization + bias correction ile **%70.92**'ye çıktığını ölçmüş.
 | --- | --- |
 | Cross-layer equalization | ✅ Vitis AI zaten yapıyor (`=>Doing weights equalization...`) |
 | Bias correction | ❓ `quant_info.json` içinde `bias_corrected` alanı var, değeri kontrol edilmeli (`--nndct_param_corr`) |
-| AdaQuant (`--fast-finetune`) | ⬜ **sıradaki** |
+| AdaQuant (`--fast-finetune`) | ✅ **denendi — HİÇ KAZANDIRMADI** (aşağı bkz.) |
 | QAT | ⚠️ GPU'lu Vitis AI ortamı ister; mevcut kurulum CPU-only, pratikte erişilemez |
-| **YOLOX-Tiny'ye geçmek** | ⬜ kök nedeni ortadan kaldırır — aşağı bkz. |
+| **YOLOX-Tiny'ye geçmek** | ⬜ **kalan tek yol** — kök nedeni ortadan kaldırır |
+
+### 🔴 PTQ MERDIVENI TÜKENDİ — Nano bu donanımda kuantalanamıyor
+
+`--fast-finetune --ft-images 32`, kalibrasyon 2 sa 14 dk, test 31 dk:
+
+| | AP | AP50 | AP75 | kayıp |
+| --- | --- | --- | --- | --- |
+| float | 0.5874 | 0.8659 | 0.6578 | — |
+| INT8, AdaQuant öncesi | 0.3589 | 0.6703 | 0.3398 | 0.2285 |
+| INT8, AdaQuant sonrası | 0.3568 | 0.6639 | 0.3423 | **0.2306** |
+
+**AdaQuant hiçbir şey kazandırmadı** (fark gürültü seviyesinde, hatta hafif
+negatif). Üç çare de uygulanmış durumda: CLE ✅, bias correction ✅, AdaQuant ✅.
+
+**Yorum:** AdaQuant'ın işi ağırlıkları oynatarak kuantalama hatasını telafi
+etmektir. Hiç kazandırmaması, darboğazın ağırlıkların yerinde değil **8 bitin
+kendisinde** olduğunu gösterir. Depthwise conv'larda kanal büyüklük oranı
+25-388× ve DPUCZDX8G aktivasyonlarda **per-tensor** ölçek kullanır. Nagel ve
+ark.'nın MobileNetV2'yi kurtaran çözümü **per-channel** kuantalamaydı; bu
+donanımda mevcut değil.
+
+**Sonuç: kalibrasyonla düzeltilebilir bir sorun değil, mimari bir sınır.**
+Nano'yu kartta kullanmak isterseniz 0.23 AP kaybını bilinçli kabul etmeniz
+gerekir. Doğru hamle Tiny'dir.
 
 **Literatür ve vendor taraması (2026-08-09):**
 
