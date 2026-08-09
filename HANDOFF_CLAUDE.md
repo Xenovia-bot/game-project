@@ -231,6 +231,30 @@ equalization + bias correction ile **%70.92**'ye çıktığını ölçmüş.
 | Bias correction | ❓ `quant_info.json` içinde `bias_corrected` alanı var, değeri kontrol edilmeli (`--nndct_param_corr`) |
 | AdaQuant (`--fast-finetune`) | ⬜ **sıradaki** |
 | QAT | ⚠️ GPU'lu Vitis AI ortamı ister; mevcut kurulum CPU-only, pratikte erişilemez |
+| **YOLOX-Tiny'ye geçmek** | ⬜ kök nedeni ortadan kaldırır — aşağı bkz. |
+
+**Literatür ve vendor taraması (2026-08-09):**
+
+- **AMD'nin kendi YOLOX tutorial'ı karma hassasiyet kullanıyor** (Vitis AI 5.1,
+  Versal **VEK280**, INT8 + **BF16**). Yani saf INT8'in YOLOX'ta yetersiz
+  kaldığı vendor tarafından da kabul edilmiş. **Bizim DPUCZDX8G INT8-only**,
+  o yol kapalı. → https://github.com/Xilinx/Vitis-AI-Tutorials
+- **Nagel ve ark., ICCV 2019** — derinlemesine-ayrılabilir ağlarda per-tensor
+  INT8 PTQ çöküyor (MobileNetV2 %0.12). Çare merdiveni: CLE → bias correction
+  → AdaRound/AdaQuant → QAT.
+- **YOLO11**, kuantalama sonrası doğruluğu iyileştirmek için **depthwise conv
+  kullanımını azaltmış** (arXiv 2510.09653). Mimari düzeyde aynı teşhis.
+- **LogicTronix'in KV260 + Vitis AI 3.0 YOLOv5 referansı** (topluluğun en yakın
+  örneği) **saf PTQ yapıyor: `fast_finetune` yok, mAP ölçümü de yok** — sadece
+  derlenmesini sağlıyor. Doğruluğu ölçen bir referans bulunamadı.
+  → https://github.com/LogicTronix/Vitis-AI-Reference-Tutorials
+
+**Kritik çıkarım — YOLOX-Tiny:** kaybın kaynağı depthwise conv'ların per-tensor
+kuantalanması. **YOLOX-Nano `depthwise=True` kullanan tek YOLOX varyantı;
+YOLOX-Tiny `depthwise=False`.** Yani Tiny'ye geçmek kök nedeni ortadan
+kaldırır. Bedeli: ~0.9M → ~5M parametre (DPU süresi artar, 30 FPS bütçesi
+yeniden ölçülmeli) ve Kaggle'da yeniden eğitim (~5 saat). AdaQuant yetmezse
+**doğru hamle budur** — QAT değil.
 
 **Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07
 (farklı görev ve farklı veri; yalnızca bağlam için):
