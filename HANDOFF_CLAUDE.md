@@ -24,6 +24,23 @@ noktası:
 > eğitim yapılmadı. **Yeni bir taksonomi önerisi gelirse önce "önce bir kez
 > uçtan uca çalıştıralım" deyin.**
 
+## 0. ŞU AN NE OLUYOR (2026-08-09 akşamı)
+
+**İki iş paralel koşuyor:**
+
+| nerede | ne | süre | ne bekleniyor |
+| --- | --- | --- | --- |
+| VM docker | Nano · AdaQuant kalibrasyonu (`--ft-images 32`) + INT8 testi | ~3,2 sa | `AP kaybi:` satırı. Kayıp 0,02'yi geçerse export yok |
+| Kaggle | **Tiny** eğitimi (`VARIANT = "tiny"`, 40 epoch) | ~5 sa | float AP ve `yolox_aerial_artifacts.zip` |
+
+**Sonra karar noktası:** Nano AdaQuant ile kapıyı geçerse Nano'yla devam;
+geçmezse Tiny'nin INT8'ini ölçüp karşılaştırırız. Tiny'de depthwise conv
+olmadığı için kuantalamanın çok daha iyi olması bekleniyor, ama ~5M parametre
+olduğu için **30 FPS bütçesi kartta yeniden ölçülmeli.**
+
+**Kod tarafında bekleyen iş yok** — dağıtım zinciri 9 tensörlü çıktıya taşındı
+(`main.cpp`, `compile_kv260.sh`, `verify_kv260_golden.py`), 74 test geçiyor.
+
 ## 2. Zincir ve nerede olduğumuz
 
 | Aşama | Durum |
