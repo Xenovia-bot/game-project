@@ -292,6 +292,17 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 
 ## 9b. Kullanıcının hazır ortamı (2026-08-09'da öğrenildi)
 
+**Tüm ortam hazır — hiçbir kurulum adımı kalmadı:**
+
+- **VM**: VirtualBox + Ubuntu kurulu, Vitis AI docker'ı da kurulmuş
+  (kullanıcı beyanı). `quantize/README.md` adım 1-6 **atlanabilir**.
+- **Kart**: KV260'da daha önce YOLOv4-tiny çalıştırılmış → SD imajı yazılı,
+  VART çalışıyor. `deploy/README.md` adım 1-3 **atlanabilir**.
+- **VM paketi**: `python tools/make_vm_package.py` → `vm_package/` (626 MB).
+  Tüm görüntü ağacını (3,6 GB) taşımaya gerek yok; paket val setinin tamamını
+  (4.483, accuracy gate alt küme kabul etmiyor) + 300 kalibrasyon karesi +
+  checkpoint + scriptleri içerir ve `KOMUTLAR.md` ile gelir.
+
 Kullanıcı **KV260'da daha önce YOLOv4-tiny çalıştırmış.** Yani:
 
 - PetaLinux/Vitis AI SD imajı **karta yazılmış ve çalışıyor** →

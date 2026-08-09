@@ -19,6 +19,7 @@ datasets/
 data/
 weights/
 artifacts/
+vm_package/
 golden/
 *.pth
 *.xmodel
