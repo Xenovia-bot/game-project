@@ -139,6 +139,28 @@ Doğrulanan üç iddia:
 CPU'ya düşen tek bir op yok — maxpool, resize (upsample), concat, elemwise_add
 dahil hepsi DPU'da. Ayrıntı: `build/quant/inspect/inspect_DPUCZDX8G_ISA1_B4096.txt`
 
+### ✅ FLOAT AP KAPISI GEÇTİ — VM, aynı gün
+
+`python quantize_yolox.py --quant-mode float` (4.483 val görüntüsü, CPU, ~15 dk):
+
+| | Kaggle (T4, YOLOX evaluator) | VM (CPU, bağımsız decode) |
+| --- | --- | --- |
+| AP@[.50:.95] | 0.5874 | **0.5874** |
+| AP@0.50 | 0.8659 | **0.8659** |
+| AP@0.75 | 0.6578 | 0.6577 (yuvarlama) |
+
+**Neden önemli:** `quantize_yolox.py` kendi letterbox/decode/NMS'ini kullanır —
+YOLOX'un `COCOEvaluator` yolundan tamamen bağımsız bir uygulamadır ve bugüne
+kadar uçtan uca doğrulanmamıştı. İki bağımsız yolun dört basamak aynı sayıyı
+vermesi, hem taşınan dosyaların hem de kart tarafında kullanılacak decode
+mantığının doğru olduğunu gösterir.
+
+**Hız:** 0,12 sn/görüntü (CPU). Tam val ~9 dk çıkarım + AP hesabı.
+
+> ⚠️ `--subset-len` **baştan almaz, eşit aralıklarla yayar** (2026-08-09'da
+> düzeltildi). Baştan alma `mendeley`'in boş karelerine denk gelip AP=0
+> veriyordu; bu bir boru hattı hatası değil, temsili olmayan örneklemdi.
+
 **Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07
 (farklı görev ve farklı veri; yalnızca bağlam için):
 
