@@ -249,6 +249,25 @@ equalization + bias correction ile **%70.92**'ye çıktığını ölçmüş.
   derlenmesini sağlıyor. Doğruluğu ölçen bir referans bulunamadı.
   → https://github.com/LogicTronix/Vitis-AI-Reference-Tutorials
 
+**Tiny varyantı yerelde doğrulandı (2026-08-09, Kaggle'a gitmeden):**
+
+| | Nano | Tiny |
+| --- | --- | --- |
+| parametre | 897.093 | **5.033.301** (5,6×) |
+| **depthwise katman anahtarı** | **180** | **0** |
+| width / depthwise | 0.25 / True | 0.375 / False |
+| girdi · sınıf · epoch | 512×896 · 2 · 40 | aynı (devralınıyor) |
+| çıktı kanalı | 7 ✓ | 7 ✓ |
+| stem | DPUFocus ✓ | DPUFocus ✓ |
+| Megvii eşleşme | %98,9 | %98,5 |
+| eksik anahtar | 7 (`cls_preds` + `space_to_depth`) | aynı |
+| notebook hücre 8 kapısı | GEÇER | **GEÇER** |
+
+Doğrulama yöntemi: YOLOX pinlenmiş commit'ten yerele klonlanıp iki exp de
+inşa edildi, Megvii `yolox_nano.pth` / `yolox_tiny.pth` indirilip hücre 8'in
+eşleşme kapısı birebir çalıştırıldı. **Kaggle'da bu adımları izlemeye gerek
+yok.**
+
 **Kritik çıkarım — YOLOX-Tiny:** kaybın kaynağı depthwise conv'ların per-tensor
 kuantalanması. **YOLOX-Nano `depthwise=True` kullanan tek YOLOX varyantı;
 YOLOX-Tiny `depthwise=False`.** Yani Tiny'ye geçmek kök nedeni ortadan
