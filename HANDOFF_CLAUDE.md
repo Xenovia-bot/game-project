@@ -327,19 +327,19 @@ Kullanıcı **KV260'da daha önce YOLOv4-tiny çalıştırmış.** Yani:
 
 ## 10. Kullanıcıyla çalışma notları
 
-- **Türkçe** konuşur, Türkçe cevap bekler.
-- **Uzun mesajlarda kayboluyor.** Kısa, numaralı, tek eylemli adımlar verin.
-  "Neyi nasıl yapacağım anlamadım" dediyse mesaj uzun demektir.
-- Tahminle iş yapılmasından hoşlanmıyor; **ölçüm ve doğrulama** istiyor.
-  "tek hatada patlarız" dedi — sessiz hatalar en büyük risk.
-- **Overengineering'den kaçının** — açıkça söyledi.
-- Başka AI'lardan (ChatGPT, Gemini) öneri getiriyor. Bunlar soyut olarak doğru
-  ama bu projenin kısıtlarında yanlış çıktı (xView sınıfları, YOLOv8). Öneri
-  gelince **kaynağı doğrulayın**, hafızadan cevap vermeyin.
-- Amiri "YOLO lise seviyesi" demiş; projenin değeri model eğitmekte değil
-  **donanım-farkında dağıtımda** (DPUFocus, kuantalama kapıları, golden test).
-- Kimlik bilgisi paylaşmaya çalıştı — **API anahtarı/token işlemeyin**, kendisi
-  yapsın.
+- İletişim dili **Türkçe**.
+- **Kısa, numaralı, tek eylemli adımlar** verin. Uzun ve çok seçenekli
+  mesajlar işi yavaşlatıyor.
+- **Tahminle iş yapılmasın; ölçüm ve doğrulama istenir.** Sessiz hatalar bu
+  projede en büyük risk — her iddia ölçülerek desteklenmeli.
+- **Overengineering'den kaçının.** Gerekmeyen soyutlama ve ölü kod istenmiyor.
+- Başka AI araçlarından gelen öneriler soyut olarak doğru olsa da bu projenin
+  kısıtlarında yanlış çıktı (xView sınıfları, YOLOv8/DFL). Öneri gelince
+  **kaynağı doğrulayın**, hafızadan cevap vermeyin.
+- Projenin değeri model eğitmekte değil **donanım-farkında dağıtımda**:
+  DPUFocus, tek-subgraph kapısı, kuantalama kabul kapıları, golden test.
+- **API anahtarı/token işlemeyin** — kimlik doğrulama adımlarını kullanıcı
+  kendisi yapar.
 
 ## 11. Doğrulama komutları
 
