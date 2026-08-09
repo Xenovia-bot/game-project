@@ -161,6 +161,38 @@ mantığının doğru olduğunu gösterir.
 > düzeltildi). Baştan alma `mendeley`'in boş karelerine denk gelip AP=0
 > veriyordu; bu bir boru hattı hatası değil, temsili olmayan örneklemdi.
 
+### 🔴 INT8 KABUL KAPISI REDDETTİ — kök neden bulundu (2026-08-09)
+
+```
+float : AP 0.5874  AP50 0.8659  AP75 0.6578
+INT8  : AP 0.2987  AP50 0.6126  AP75 0.2526
+kayip : 0.2887  (sinir 0.02 -- 14 kati)
+```
+
+Kayıp konumlandırmaya yığılmış: AP50 %71 korunmuş, **AP75 yalnızca %38**.
+Model nesneyi buluyor ama kutuyu kaba yerleştiriyor.
+
+**Kök neden — ölçüldü (`vm_package/tani_int8.py`):**
+
+`DeployModel` reg(4)+obj(1)+cls(2) kanallarını `torch.cat` ile tek 7 kanallı
+tensöre birleştiriyor. Vitis AI'da concat donanımda sadece bellek düzenidir ve
+**tüm girdilerin aynı `fix_point`'i paylaşmasını zorunlu kılar.** Ölçülen
+float aralıklar:
+
+| seviye | tensör genişliği | ortak adım | `reg_x` seviye sayısı | merkez hatası | boyut hatası |
+| --- | --- | --- | --- | --- | --- |
+| stride 8 | ±76.0 | 1.0 | **4** / 256 | **8 px** | %65 |
+| stride 16 | ±37.9 | 0.5 | 8 | 8 px | %28 |
+| stride 32 | ±22.8 | 0.25 | 17 | 8 px | %13 |
+
+Ölçeği belirleyen **`obj` kanalı**: stride 8'de min `-76.0`. sigmoid(-76)=1e-33,
+yani tespit için sıfır bilgi taşıyor — ama reg kanallarının hassasiyetini
+tek başına yok ediyor. Medyan kutu 18 px iken 8 px merkez hatası IoU 0.75'i
+imkânsız kılar.
+
+**`--fast-finetune` bunu çözmez:** ağırlıkları ayarlar, concat'in ölçek
+paylaşımını değiştiremez.
+
 **Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07
 (farklı görev ve farklı veri; yalnızca bağlam için):
 
