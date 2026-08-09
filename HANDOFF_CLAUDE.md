@@ -29,8 +29,8 @@ noktası:
 | Aşama | Durum |
 | --- | --- |
 | Veri birleştirme | ✅ **bitti, doğrulandı** (19.476 train / 4.483 val) |
-| Kaggle eğitimi (2 sınıf) | ⬜ **sıradaki iş** — ~1,5-2 saat |
-| Oracle VM · Vitis AI 3.0 PTQ | ⬜ |
+| Kaggle eğitimi (2 sınıf) | ✅ **bitti** 2026-08-09 · 40/40 epoch · **4,9 saat** (T4) · AP@0.50 = **0.8659** |
+| Oracle VM · Vitis AI 3.0 PTQ | ⬜ **sıradaki iş** — `--float-map 0.5874` |
 | KV260 · C++ VART + golden test | ⬜ |
 | Rapor | ⬜ |
 
@@ -88,7 +88,37 @@ birleştirmek düşürür (kanguru türleri 0.968'e çıktı; domuz+keçi 0.897/
 
 ## 5. Ölçülmüş gerçekler (yeniden türetmeyin)
 
-**Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07:
+### 🎯 HEDEF ÇALIŞTIRMA — 2 sınıf, 896×512, 40 epoch, T4, 2026-08-09
+
+Birleşik val setinde (4.483 görüntü), `eval.py --conf 0.001`, resmi ignore
+filtresi + global top-500 + VOC AP:
+
+| | AP@[.50:.95] | AP@0.50 | AP@0.75 | En iyi F1 |
+| --- | --- | --- | --- | --- |
+| **saha (ortalama)** | **0.5874** | **0.8659** | 0.6578 | 0.8274 @ conf 0.46 |
+| `land_vehicle` | 0.4796 | 0.7807 | — | 0.7547 |
+| `sea_vehicle` | 0.6952 | 0.9512 | — | 0.9012 |
+
+Dağıtım çalışma noktası `conf=0.15`: **F1 = 0.7669, P = 0.6911, R = 0.8685.**
+T4'te forward 3,74 ms + NMS 1,29 ms. Megvii başlangıcı %98,9 eşleşti.
+
+AP@0.50 ilerlemesi: e5 0.747 · e10 0.839 · e15 0.844 · e20 0.854 · e25 0.859 ·
+e30 0.860 · e40 0.861. **Model epoch ~25'te doydu** (25→40 arası +0.002).
+40 epoch fazlasıyla yeterli; tekrar eğitim gerekirse **30 epoch** aynı sonucu
+verir ve ~1,2 saat kazandırır.
+
+> ⚠️ **Süre:** 40 epoch **1,5-2 saat değil, 4,9 saat** sürdü. Kaggle GPU
+> kotasını buna göre planlayın.
+
+> ⚠️ **Bu sayıları yayınlanmış VisDrone sonuçlarıyla KARŞILAŞTIRMAYIN.**
+> Üç sebep: (1) tek birleşik araç sınıfı, 10 sınıflı ortalamadan çok daha
+> kolay — kutuların %77'si `car`; (2) val setinin yalnızca 548 görüntüsü
+> VisDrone; (3) `sea_vehicle` 0.95'i tek limanın ezberlenmesi
+> (bkz. §4). `land_vehicle` 0.78 nispeten gerçek: val land kutularının
+> %91'i VisDrone'dan. Raporda bu üç uyarı mutlaka yer almalı.
+
+**Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07
+(farklı görev ve farklı veri; yalnızca bağlam için):
 
 | Epoch | AP@[.50:.95] | AP@0.50 | AP@0.75 |
 | --- | --- | --- | --- |
@@ -239,29 +269,18 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 
 ## 9. Sıradaki adımlar
 
-1. **Kaggle**: notebook'u import et → `aerial-vehicle-sources` bağla → GPU +
-   Internet aç → **hücre 1-6 çalıştır, dur**. Hücre 6 şunu basmalı:
-   `train 19476 / 205340`, `val 4483 / 21681`. Tutmazsa çıktıyı incele.
-2. Hücre 7 → 9 ile **eğitim** (~1,5-2 saat, 40 epoch).
-3. Hücre 11 değerlendirme → **sınıf bazlı AP'ye bak**. Beklenti ve okuma
-   kılavuzu (bkz. §4):
-   - `sea_vehicle` AP yüksek çıkacak — bu **iyi haber değil**, tek limanın
-     ezberlenmesi de aynı sonucu verir. Rapora uyarıyla yazın.
-   - `land_vehicle` AP düşük çıkacak — kutuların %96'sı VisDrone'dan ve
-     medyan 18 px. Asıl sinyal budur.
-   - İkisinin farkı büyükse önce **çözünürlük/nesne boyutu** açıklamasını
-     düşünün, sınıf semantiğini değil.
-   Bu koşu **taban çizgisidir**: mendeley temizliğinin (§4) fayda edip
-   etmediği ancak buna karşı ölçülerek anlaşılır.
-4. Hücre 13 → `yolox_aerial_artifacts.zip` indir.
-5. **VM**: `quantize/README.md`. `--inspect` ile kare olmayan girdinin tek DPU
+1. ~~Kaggle eğitimi~~ ✅ **bitti** 2026-08-09, sonuçlar §5'te. Taban çizgisi
+   artık var: mendeley temizliğinin (§4) fayda edip etmediği buna karşı
+   ölçülebilir. `yolox_aerial_artifacts.zip` Kaggle Output'tan indirilecek.
+2. **VM**: `quantize/README.md`. `--inspect` ile kare olmayan girdinin tek DPU
    subgraph'ine derlendiğini doğrula. VM'e `datasets/merged/images` ağacı ve
    `instances_val.json` lazım (kalibrasyonu train'den yapmak için
    `instances_train.json` da). **Açık soru:** INT8 kabul testi 4.483 görüntü
    üzerinde CPU'da saatler sürer ve `--subset-len` bilerek yasak.
-6. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
-7. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı.
-8. **Rapor**: `docs/report_template.md`.
+   **Float AP referansı: `--float-map 0.5874`** (§5).
+3. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
+4. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı.
+5. **Rapor**: `docs/report_template.md` (§5'teki sayılar ve üç uyarı ile).
 
 ## 10. Kullanıcıyla çalışma notları
 
