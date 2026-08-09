@@ -88,9 +88,10 @@ cd ~/yolox_visdrone
 ```
 
 Hızlı deneme için `--max-frames 100` ekleyebilirsiniz.
-Uygulama başlangıçta xmodel'in yalnızca bir DPU subgraph, bir NHWC giriş ve
-stride 8/16/32 olan üç çıkış içerdiğini doğrular. Çıkış kanal sayısı
-`5 + sınıf sayısı` olmalıdır; 2 sınıflı (`land_vehicle`/`sea_vehicle`) modelde **7**.
+Uygulama başlangıçta xmodel'in yalnızca bir DPU subgraph ve bir NHWC giriş
+içerdiğini doğrular. Çıkışta **9 tensör** bekler: 3 stride seviyesi × (reg 4 / obj 1 / cls 2).
+Baş çıktıları bilerek birleştirilmez — birleştirmek Vitis AI'da hepsini aynı
+`fix_point`'e zorluyor ve INT8 doğruluğunu çökertiyor (bkz. `deploy/src/main.cpp`).
 
 Varsayılan `--conf` **0.15**'tir: recall odaklı çalışma noktası. Yanlış
 pozitifleri takip katmanı elemek üzere tasarlanmıştır; takip henüz

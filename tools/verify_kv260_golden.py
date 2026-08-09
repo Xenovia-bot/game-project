@@ -76,59 +76,69 @@ def deterministic_key(det):
     )
 
 
+def read_tensor(dump_dir, meta, level, role, channels):
+    """Bir seviyenin tek bir rol tensorunu okur ve (int8, olcek) dondurur."""
+    height = int(meta[f"level{level}_h"])
+    width = int(meta[f"level{level}_w"])
+    scale = np.float32(meta[f"level{level}_{role}_scale"])
+    path = dump_dir / meta[f"level{level}_{role}_file"]
+    raw = np.fromfile(path, dtype=np.int8)
+    expected = height * width * channels
+    if raw.size != expected:
+        raise ValueError(
+            "%s boyutu %d; beklenen %d" % (path, raw.size, expected)
+        )
+    return raw.reshape(height, width, channels), scale
+
+
 def decode_reference(dump_dir, meta):
+    """Kart dokumunden kutulari bagimsiz olarak yeniden cozer.
+
+    Her seviye UC ayri tensor tasir (reg/obj/cls) ve **her birinin kendi
+    fix_point'i** vardir; bu yuzden olcekler ayri ayri okunur. Birlesik tek
+    tensor kullanmama gerekcesi deploy/src/main.cpp icinde anlatiliyor.
+    """
     candidates = []
     num_levels = int(meta["num_levels"])
-    # Kanal sayisi sinif semasindan turetilir (reg 4 + obj 1 + sinif). Sabit
-    # bir sayi yazmak semayi degistirdigimizde bu testi sessizce kirardi.
     num_classes = None
     for i in range(num_levels):
         h = int(meta[f"level{i}_h"])
         w = int(meta[f"level{i}_w"])
-        c = int(meta[f"level{i}_c"])
         stride = int(meta[f"level{i}_stride"])
-        scale = np.float32(meta[f"level{i}_scale"])
-        if c < 6:
-            raise ValueError(
-                "Cikti kanali en az 6 olmali (reg 4 + obj 1 + >=1 sinif), "
-                "bulunan %d" % c
-            )
+        nc = int(meta[f"level{i}_nc"])
+        if nc < 1:
+            raise ValueError("Sinif sayisi en az 1 olmali, bulunan %d" % nc)
         if num_classes is None:
-            num_classes = c - 5
-        elif c - 5 != num_classes:
+            num_classes = nc
+        elif nc != num_classes:
             raise ValueError(
                 "Seviyeler farkli sinif sayisi bildiriyor: %d != %d"
-                % (c - 5, num_classes)
+                % (nc, num_classes)
             )
 
-        file_path = dump_dir / meta[f"level{i}_file"]
-        raw = np.fromfile(file_path, dtype=np.int8)
-        if raw.size != h * w * c:
-            raise ValueError(
-                "%s boyutu %d; beklenen %d" % (file_path, raw.size, h * w * c)
-            )
-        raw = raw.reshape(h, w, c)
-        values = raw.astype(np.float32) * scale
+        reg, reg_scale = read_tensor(dump_dir, meta, i, "reg", 4)
+        obj, obj_scale = read_tensor(dump_dir, meta, i, "obj", 1)
+        cls, cls_scale = read_tensor(dump_dir, meta, i, "cls", nc)
+
+        reg_f = reg.astype(np.float32) * reg_scale
         gy, gx = np.meshgrid(
             np.arange(h, dtype=np.float32),
             np.arange(w, dtype=np.float32),
             indexing="ij",
         )
 
-        class_id = np.argmax(raw[:, :, 5:], axis=2)
-        best_raw = np.take_along_axis(
-            raw[:, :, 5:], class_id[:, :, None], axis=2
-        )[:, :, 0]
-        score = sigmoid(values[:, :, 4]) * sigmoid(
-            best_raw.astype(np.float32) * scale
+        class_id = np.argmax(cls, axis=2)
+        best_raw = np.take_along_axis(cls, class_id[:, :, None], axis=2)[:, :, 0]
+        score = sigmoid(obj[:, :, 0].astype(np.float32) * obj_scale) * sigmoid(
+            best_raw.astype(np.float32) * cls_scale
         )
         mask = score >= np.float32(meta["conf"])
         ys, xs = np.nonzero(mask)
         for y, x in zip(ys.tolist(), xs.tolist()):
-            cx = (values[y, x, 0] + gx[y, x]) * stride
-            cy = (values[y, x, 1] + gy[y, x]) * stride
-            bw = np.exp(values[y, x, 2]) * stride
-            bh = np.exp(values[y, x, 3]) * stride
+            cx = (reg_f[y, x, 0] + gx[y, x]) * stride
+            cy = (reg_f[y, x, 1] + gy[y, x]) * stride
+            bw = np.exp(reg_f[y, x, 2]) * stride
+            bh = np.exp(reg_f[y, x, 3]) * stride
             candidates.append({
                 "class_id": int(class_id[y, x]),
                 "score": float(score[y, x]),

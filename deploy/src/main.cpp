@@ -59,20 +59,49 @@ struct Detection {
   int cls;
 };
 
-// Bir DPU cikti tensorunun (stride seviyesinin) onbellege alinmis bilgileri.
+// Bir stride seviyesi: reg/obj/cls AYRI tensorlerdir.
+//
+// Neden ayri (2026-08-09'da olculdu): bu ucu modelde `torch.cat` ile tek
+// tensore birlestirmek, Vitis AI'da hepsini AYNI fix_point'e zorluyor (concat
+// donanimda yalnizca bellek duzenidir). obj logitleri -76'ya kadar inerken reg
+// ofsetleri +-2.9 araliginda; ortak olcek reg'e 256 seviyenin ~16'sini
+// birakiyor ve kutu merkezi stride 16'da 4 piksele kayiyordu.
+//
 // INT8 ciktilar yalnizca 256 farkli deger alabildiginden sigmoid/exp
-// fonksiyonlari tensor basina LUT olarak bir kez hesaplanir.
+// fonksiyonlari tensor basina LUT olarak bir kez hesaplanir. Her tensorun
+// kendi fix_point'i oldugu icin LUT'lar da ayridir.
 struct OutputLevel {
-  vart::TensorBuffer* buffer = nullptr;
+  vart::TensorBuffer* reg = nullptr;  // [1,H,W,4]  cx,cy,logw,logh (ham)
+  vart::TensorBuffer* obj = nullptr;  // [1,H,W,1]  objectness logiti
+  vart::TensorBuffer* cls = nullptr;  // [1,H,W,nc] sinif logitleri
   int height = 0;
   int width = 0;
-  int channels = 0;
   int stride = 0;
-  float scale = 1.0f;  // dequantize: float = int8 * scale (scale = 2^-fix_point)
-  std::vector<float> sigmoid_lut;
-  std::vector<float> exp_lut;
+  int num_classes = 0;
+  // dequantize: float = int8 * scale (scale = 2^-fix_point)
+  float reg_scale = 1.0f;
+  float obj_scale = 1.0f;
+  float cls_scale = 1.0f;
+  std::vector<float> reg_exp_lut;      // exp(v * reg_scale)
+  std::vector<float> obj_sigmoid_lut;  // sigmoid(v * obj_scale)
+  std::vector<float> cls_sigmoid_lut;  // sigmoid(v * cls_scale)
   int8_t obj_gate = 127;  // sigmoid(obj) >= conf kosulunun ham int8 karsiligi
+
+  bool complete() const { return reg && obj && cls; }
 };
+
+// Bir cikti tensorunun ham int8 isaretcisini dogrulayarak alir.
+const int8_t* tensor_data(vart::TensorBuffer* tb, size_t expected,
+                          const char* what) {
+  uint64_t addr = 0u;
+  size_t size = 0u;
+  std::tie(addr, size) = tb->data(std::vector<int>{0, 0, 0, 0});
+  if (addr == 0u || size < expected) {
+    std::cerr << "HATA: " << what << " tampon boyutu yetersiz\n";
+    return nullptr;
+  }
+  return reinterpret_cast<const int8_t*>(addr);
+}
 
 float sigmoidf(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
@@ -203,8 +232,11 @@ int main(int argc, char* argv[]) {
   auto runner = vart::RunnerExt::create_runner(dpu_subgraph, attrs.get());
   auto input_tbs = runner->get_inputs();
   auto output_tbs = runner->get_outputs();
-  if (input_tbs.size() != 1 || output_tbs.size() != 3) {
-    std::cerr << "HATA: beklenen tensor sayisi input=1/output=3; bulunan "
+  // 9 cikti = 3 stride seviyesi x (reg, obj, cls). Bas ciktilari bilerek
+  // birlestirilmez; gerekcesi OutputLevel'in aciklamasinda.
+  if (input_tbs.size() != 1 || output_tbs.size() != 9) {
+    std::cerr << "HATA: beklenen tensor sayisi input=1/output=9 "
+                 "(3 seviye x reg/obj/cls); bulunan "
               << input_tbs.size() << "/" << output_tbs.size() << "\n";
     return 1;
   }
@@ -227,52 +259,96 @@ int main(int argc, char* argv[]) {
   // sigmoid(obj) < conf hucrelerini ham int8 uzerinden ele (logit esigi)
   const float obj_logit_gate = -std::log(1.0f / conf_thr - 1.0f);
 
+  // Rolleri kanal sayisindan tanimak icin ucunun de farkli olmasi sart.
+  static_assert(kNumClassNames != 4 && kNumClassNames != 1,
+                "Sinif sayisi 4 veya 1 olursa cikti rolleri kanal sayisindan "
+                "ayirt edilemez; tensorleri ada gore eslemek gerekir.");
+
+  const int num_classes = kNumClassNames;
+
+  // VART cikti tensorlerinin SIRASINI GARANTI ETMEZ (Xilinx'in kendi
+  // orneklerinde de bu yuzden acik bir output_mapping tutulur). Bu yuzden
+  // siraya hic guvenmiyoruz: once uzamsal boyuta gore seviyelere gruplayip,
+  // rolu kanal sayisindan taniyoruz (4=reg, 1=obj, num_classes=cls).
   std::vector<OutputLevel> levels;
-  int num_classes = 0;
   for (auto* tb : output_tbs) {
-    OutputLevel lv;
-    lv.buffer = tb;
-    auto shape = tb->get_tensor()->get_shape();  // [1, H, W, C]
+    const auto shape = tb->get_tensor()->get_shape();  // [1, H, W, C]
     if (shape.size() != 4 || shape[0] != 1 || shape[1] <= 0 || shape[2] <= 0 ||
-        shape[3] != kNumClassNames + 5 || in_h % shape[1] != 0 ||
-        in_w % shape[2] != 0 || in_h / shape[1] != in_w / shape[2] ||
+        in_h % shape[1] != 0 || in_w % shape[2] != 0 ||
+        in_h / shape[1] != in_w / shape[2] ||
         !tb->get_tensor()->has_attr("fix_point")) {
       std::cerr << "HATA: gecersiz YOLOX cikti tensor sekli/niteligi\n";
       return 1;
     }
-    lv.height = shape.at(1);
-    lv.width = shape.at(2);
-    lv.channels = shape.at(3);
-    lv.stride = in_h / lv.height;
-    const int fixpos = tb->get_tensor()->get_attr<int>("fix_point");
-    lv.scale = std::exp2f(-1.0f * static_cast<float>(fixpos));
-    lv.sigmoid_lut.resize(256);
-    lv.exp_lut.resize(256);
-    for (int v = -128; v < 128; ++v) {
-      const float f = static_cast<float>(v) * lv.scale;
-      lv.sigmoid_lut[v + 128] = sigmoidf(f);
-      lv.exp_lut[v + 128] = std::exp(f);
+    const int height = shape.at(1);
+    const int width = shape.at(2);
+    const int channels = shape.at(3);
+    const float scale = std::exp2f(
+        -1.0f * static_cast<float>(tb->get_tensor()->get_attr<int>("fix_point")));
+
+    auto it = std::find_if(levels.begin(), levels.end(),
+                           [&](const OutputLevel& lv) {
+                             return lv.height == height && lv.width == width;
+                           });
+    if (it == levels.end()) {
+      OutputLevel lv;
+      lv.height = height;
+      lv.width = width;
+      lv.stride = in_h / height;
+      lv.num_classes = num_classes;
+      levels.push_back(lv);
+      it = levels.end() - 1;
     }
-    lv.obj_gate = static_cast<int8_t>(std::max(
-        -128.0f, std::min(127.0f, std::ceil(obj_logit_gate / lv.scale))));
-    levels.push_back(lv);
-    const int this_num_classes = lv.channels - 5;
-    if (num_classes != 0 && num_classes != this_num_classes) {
-      std::cerr << "HATA: cikti tensorlarinin sinif sayilari farkli\n";
+
+    if (channels == 4) {
+      it->reg = tb;
+      it->reg_scale = scale;
+    } else if (channels == 1) {
+      it->obj = tb;
+      it->obj_scale = scale;
+    } else if (channels == num_classes) {
+      it->cls = tb;
+      it->cls_scale = scale;
+    } else {
+      std::cerr << "HATA: taninmayan cikti kanal sayisi " << channels
+                << " (beklenen 4=reg, 1=obj, " << num_classes << "=cls)\n";
       return 1;
     }
-    num_classes = this_num_classes;
+  }
+
+  if (levels.size() != 3) {
+    std::cerr << "HATA: 3 stride seviyesi bekleniyordu; bulunan "
+              << levels.size() << "\n";
+    return 1;
   }
   std::sort(levels.begin(), levels.end(),
             [](const OutputLevel& a, const OutputLevel& b) {
               return a.stride < b.stride;
             });
-  const std::set<int> strides = {
-      levels[0].stride, levels[1].stride, levels[2].stride};
-  if (num_classes != kNumClassNames || strides != std::set<int>({8, 16, 32})) {
-    std::cerr << "HATA: model " << kNumClassNames
-              << " sinifli ve stride 8/16/32 olmali; bulunan sinif sayisi "
-              << num_classes << "\n";
+
+  std::set<int> strides;
+  for (auto& lv : levels) {
+    if (!lv.complete()) {
+      std::cerr << "HATA: stride " << lv.stride
+                << " seviyesinde reg/obj/cls tensorlerinden biri eksik\n";
+      return 1;
+    }
+    strides.insert(lv.stride);
+    lv.reg_exp_lut.resize(256);
+    lv.obj_sigmoid_lut.resize(256);
+    lv.cls_sigmoid_lut.resize(256);
+    for (int v = -128; v < 128; ++v) {
+      const float f = static_cast<float>(v);
+      lv.reg_exp_lut[v + 128] = std::exp(f * lv.reg_scale);
+      lv.obj_sigmoid_lut[v + 128] = sigmoidf(f * lv.obj_scale);
+      lv.cls_sigmoid_lut[v + 128] = sigmoidf(f * lv.cls_scale);
+    }
+    // obj kendi olcegine sahip oldugu icin gate de ona gore hesaplanir.
+    lv.obj_gate = static_cast<int8_t>(std::max(
+        -128.0f, std::min(127.0f, std::ceil(obj_logit_gate / lv.obj_scale))));
+  }
+  if (strides != std::set<int>({8, 16, 32})) {
+    std::cerr << "HATA: cikti stride degerleri 8/16/32 olmali\n";
     return 1;
   }
 
@@ -281,7 +357,10 @@ int main(int argc, char* argv[]) {
   std::cout << "Sinif sayisi : " << num_classes << "\n";
   for (const auto& lv : levels) {
     std::cout << "  cikti " << lv.width << "x" << lv.height
-              << " stride=" << lv.stride << " scale=" << lv.scale << "\n";
+              << " stride=" << lv.stride
+              << "  olcek reg=" << lv.reg_scale
+              << " obj=" << lv.obj_scale
+              << " cls=" << lv.cls_scale << "\n";
   }
 
   // ---------------- video girisi/ciktisi ----------------
@@ -415,72 +494,81 @@ int main(int argc, char* argv[]) {
       }
       for (size_t level_idx = 0; level_idx < levels.size(); ++level_idx) {
         const auto& lv = levels[level_idx];
-        uint64_t raw_addr = 0u;
-        size_t raw_size = 0u;
-        std::tie(raw_addr, raw_size) =
-            lv.buffer->data(std::vector<int>{0, 0, 0, 0});
-        const size_t expected = static_cast<size_t>(
-            lv.height) * lv.width * lv.channels * sizeof(int8_t);
-        if (raw_addr == 0u || raw_size < expected) {
-          std::cerr << "HATA: golden dump output buffer gecersiz\n";
-          return 1;
-        }
-        const std::string file_name =
-            "output_stride" + std::to_string(lv.stride) + ".bin";
-        std::ofstream raw(std::filesystem::path(dump_dir) / file_name,
-                          std::ios::binary);
-        raw.write(reinterpret_cast<const char*>(raw_addr), expected);
-        if (!raw) {
-          std::cerr << "HATA: golden dump tensoru yazilamadi\n";
-          return 1;
-        }
-        meta << "level" << level_idx << "_file=" << file_name << "\n"
-             << "level" << level_idx << "_h=" << lv.height << "\n"
+        const size_t cells = static_cast<size_t>(lv.height) * lv.width;
+        const struct {
+          const char* role;
+          vart::TensorBuffer* tb;
+          int channels;
+          float scale;
+        } parts[] = {
+            {"reg", lv.reg, 4, lv.reg_scale},
+            {"obj", lv.obj, 1, lv.obj_scale},
+            {"cls", lv.cls, lv.num_classes, lv.cls_scale},
+        };
+        meta << "level" << level_idx << "_h=" << lv.height << "\n"
              << "level" << level_idx << "_w=" << lv.width << "\n"
-             << "level" << level_idx << "_c=" << lv.channels << "\n"
              << "level" << level_idx << "_stride=" << lv.stride << "\n"
-             << "level" << level_idx << "_scale=" << lv.scale << "\n";
+             << "level" << level_idx << "_nc=" << lv.num_classes << "\n";
+        for (const auto& part : parts) {
+          const size_t expected = cells * part.channels * sizeof(int8_t);
+          const int8_t* raw_ptr =
+              tensor_data(part.tb, expected, "golden dump output");
+          if (raw_ptr == nullptr) return 1;
+          const std::string file_name = "output_stride" +
+                                        std::to_string(lv.stride) + "_" +
+                                        part.role + ".bin";
+          std::ofstream raw(std::filesystem::path(dump_dir) / file_name,
+                            std::ios::binary);
+          raw.write(reinterpret_cast<const char*>(raw_ptr), expected);
+          if (!raw) {
+            std::cerr << "HATA: golden dump tensoru yazilamadi\n";
+            return 1;
+          }
+          meta << "level" << level_idx << "_" << part.role
+               << "_file=" << file_name << "\n"
+               << "level" << level_idx << "_" << part.role
+               << "_scale=" << part.scale << "\n";
+        }
       }
     }
     std::vector<Detection> cands;
     for (const auto& lv : levels) {
-      uint64_t out_data = 0u;
-      size_t out_size = 0u;
-      std::tie(out_data, out_size) =
-          lv.buffer->data(std::vector<int>{0, 0, 0, 0});
-      const int8_t* d = reinterpret_cast<const int8_t*>(out_data);
-      const size_t expected_output = static_cast<size_t>(
-          lv.height) * lv.width * lv.channels * sizeof(int8_t);
-      if (d == nullptr || out_size < expected_output) {
-        std::cerr << "HATA: DPU output buffer boyutu yetersiz\n";
-        return 1;
-      }
+      const size_t cells = static_cast<size_t>(lv.height) * lv.width;
+      const int8_t* reg = tensor_data(lv.reg, cells * 4, "reg");
+      const int8_t* obj = tensor_data(lv.obj, cells * 1, "obj");
+      const int8_t* cls = tensor_data(lv.cls, cells * lv.num_classes, "cls");
+      if (reg == nullptr || obj == nullptr || cls == nullptr) return 1;
+
       for (int gy = 0; gy < lv.height; ++gy) {
         for (int gx = 0; gx < lv.width; ++gx) {
-          const int base = (gy * lv.width + gx) * lv.channels;
-          const int8_t obj_raw = d[base + 4];
+          const int cell = gy * lv.width + gx;
+          const int8_t obj_raw = obj[cell];
           if (obj_raw < lv.obj_gate) continue;  // hizli eleme
-          const float obj_s = lv.sigmoid_lut[obj_raw + 128];
+          const float obj_s = lv.obj_sigmoid_lut[obj_raw + 128];
 
           // en yuksek sinif: sigmoid monoton oldugu icin ham deger yeter
+          const int cls_base = cell * lv.num_classes;
           int best_c = 0;
-          int8_t best_raw = d[base + 5];
-          for (int c = 1; c < num_classes; ++c) {
-            if (d[base + 5 + c] > best_raw) {
-              best_raw = d[base + 5 + c];
+          int8_t best_raw = cls[cls_base];
+          for (int c = 1; c < lv.num_classes; ++c) {
+            if (cls[cls_base + c] > best_raw) {
+              best_raw = cls[cls_base + c];
               best_c = c;
             }
           }
-          const float score = obj_s * lv.sigmoid_lut[best_raw + 128];
+          const float score = obj_s * lv.cls_sigmoid_lut[best_raw + 128];
           if (score < conf_thr) continue;
 
           // YOLOX decode (reg ciktilari ham, sigmoid'siz)
-          const float cx = (static_cast<float>(d[base + 0]) * lv.scale + gx) *
-                           lv.stride;
-          const float cy = (static_cast<float>(d[base + 1]) * lv.scale + gy) *
-                           lv.stride;
-          const float bw = lv.exp_lut[d[base + 2] + 128] * lv.stride;
-          const float bh = lv.exp_lut[d[base + 3] + 128] * lv.stride;
+          const int reg_base = cell * 4;
+          const float cx =
+              (static_cast<float>(reg[reg_base + 0]) * lv.reg_scale + gx) *
+              lv.stride;
+          const float cy =
+              (static_cast<float>(reg[reg_base + 1]) * lv.reg_scale + gy) *
+              lv.stride;
+          const float bw = lv.reg_exp_lut[reg[reg_base + 2] + 128] * lv.stride;
+          const float bh = lv.reg_exp_lut[reg[reg_base + 3] + 128] * lv.stride;
 
           Detection det;
           det.x1 = cx - bw * 0.5f;
