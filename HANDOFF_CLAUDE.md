@@ -190,8 +190,47 @@ yani tespit için sıfır bilgi taşıyor — ama reg kanallarının hassasiyeti
 tek başına yok ediyor. Medyan kutu 18 px iken 8 px merkez hatası IoU 0.75'i
 imkânsız kılar.
 
-**`--fast-finetune` bunu çözmez:** ağırlıkları ayarlar, concat'in ölçek
-paylaşımını değiştiremez.
+**Düzeltme 1 — concat kaldırıldı** (`DeployModel` 9 ayrı tensör döndürüyor).
+Ölçüldü: **yardımcı oldu ama yetmedi.**
+
+| | concat'li | ayrı tensör | float |
+| --- | --- | --- | --- |
+| AP | 0.2987 | 0.3589 | 0.5874 |
+| AP50 | 0.6126 | 0.6703 | 0.8659 |
+| AP75 | 0.2526 | **0.3398** | 0.6578 |
+| kayıp | 0.2887 | **0.2285** | — |
+
+AP75'in orantısız iyileşmesi (%34 göreli) teşhisi doğruluyor, ama açığın
+yalnızca %21'i kapandı. Kalan kayıp AP50'de de olduğu için sorun baş
+çıktısında değil **özellik katmanlarında.**
+
+**Kök neden 2 — ağırlık dağılımı (yerelde ölçüldü, `bn_fold_analysis`):**
+
+BN katlandıktan sonra (`W·γ/√(var+ε)`) kanal büyüklükleri arasındaki oran:
+
+| grup | medyan oran | en zayıf kanalın seviye sayısı (medyan / p10 / min) |
+| --- | --- | --- |
+| depthwise (30 adet) | 25× | 5.1 / 2.05 / **0.33** |
+| normal (74 adet) | 7.5× | 17.0 / 4.60 / **0.10** |
+
+En kötü katman **`backbone.backbone.stem.conv`** — DPUFocus'un BaseConv'u.
+Oran **1327×**, en zayıf kanal 8 bitin **0.10 seviyesini** kullanabiliyor,
+yani o kanal INT8'de tamamen yok oluyor. Ardından `dark2.0.dconv` (388×).
+104 katmanın 4'ünde en zayıf kanal 2 seviyenin altında; 3'ü depthwise.
+
+Bu, literatürde iyi bilinen bir başarısızlık kipi: derinlemesine-ayrılabilir
+ağlarda **per-tensor** INT8 PTQ çöker. Nagel ve ark. (ICCV 2019) MobileNetV2'de
+naif per-tensor ile ImageNet doğruluğunun **%0.12**'ye düştüğünü, cross-layer
+equalization + bias correction ile **%70.92**'ye çıktığını ölçmüş.
+
+**Merdivenin neresindeyiz:**
+
+| çare | durum |
+| --- | --- |
+| Cross-layer equalization | ✅ Vitis AI zaten yapıyor (`=>Doing weights equalization...`) |
+| Bias correction | ❓ `quant_info.json` içinde `bias_corrected` alanı var, değeri kontrol edilmeli (`--nndct_param_corr`) |
+| AdaQuant (`--fast-finetune`) | ⬜ **sıradaki** |
+| QAT | ⚠️ GPU'lu Vitis AI ortamı ister; mevcut kurulum CPU-only, pratikte erişilemez |
 
 **Referans çalıştırma** — 10 sınıf, 640×640, 80 epoch, T4, 2026-08-07
 (farklı görev ve farklı veri; yalnızca bağlam için):
