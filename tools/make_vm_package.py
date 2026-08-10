@@ -72,12 +72,22 @@ def main():
     # --- kaynak dosyalar ---
     needed = {
         "best_ckpt.pth": artifacts / "best_ckpt.pth",
-        "yolox_nano_visdrone.py": artifacts / "yolox_nano_visdrone.py",
+        # Exp'ler REPO'dan gelir, artifacts kopyasindan degil. Sebep: Tiny
+        # turevi `yolox_nano_visdrone.py`'yi import edip yalnizca
+        # `self.depthwise = False` yapar. artifacts kopyasi `get_model()`
+        # icinde `depthwise=True` yazan eski surumdur; Tiny onun yanina
+        # konursa depthwise'li model kurulur -- tam kacinmaya calistigimiz
+        # sey. Nano icin iki dosya mimari olarak ozdestir (fark yalnizca
+        # sabit yerine `self.depthwise` kullanmak), ve checkpoint'in
+        # mimariye uydugu `load_checkpoint_strict` kapisinda dogrulanir.
+        "yolox_nano_visdrone.py": ROOT / "training" / "exps" / "yolox_nano_visdrone.py",
+        "yolox_tiny_visdrone.py": ROOT / "training" / "exps" / "yolox_tiny_visdrone.py",
         "YOLOX_COMMIT.txt": artifacts / "YOLOX_COMMIT.txt",
         # visdrone_eval.py artifacts'takinin degil REPO'daki temiz surumu:
         # ikisi sayisal olarak ozdes, tek kaynak olsun diye repo secildi.
         "visdrone_eval.py": ROOT / "training" / "visdrone_eval.py",
         "quantize_yolox.py": ROOT / "quantize" / "quantize_yolox.py",
+        "qat_probe.py": ROOT / "quantize" / "qat_probe.py",
         "compile_kv260.sh": ROOT / "quantize" / "compile_kv260.sh",
     }
     eksik = [str(p) for p in needed.values() if not p.is_file()]
@@ -209,10 +219,82 @@ bash compile_kv260.sh
 ```
 
 Cikti: `build/compiled/yolox_nano_visdrone.xmodel`. Script tek DPU subgraph,
-1 girdi ve 3 adet **7 kanalli** cikti dogrular.
+1 girdi ve **9 cikti** dogrular: her stride (8/16/32) icin ayri reg(4) /
+obj(1) / cls(2) tensoru. Concat kaldirildi cunku Vitis AI concat girdilerini
+ayni `fix_point`'e zorluyordu ve reg hassasiyetini yok ediyordu.
 
 > Kartinizin DPU arch'i B4096 degilse `compile_kv260.sh` icindeki `ARCH`
 > yolunu degistirin. Kartta `xdputil query` ile kontrol edin.
+
+## 9. YOLOX-Tiny (Nano INT8 kapiyi gecemediyse asil yol budur)
+
+Nano'da kayip 0.2306'da kaldi ve kok neden olculdu: **depthwise conv'larin
+per-tensor kuantalanmasi**. Tiny `depthwise=False` kullanir, yani kok nedeni
+ortadan kaldirir. Kaggle'daki Tiny egitimi bitince:
+
+### 9.1 Dosyalari yerlestirin
+
+Tiny checkpoint'ini Nano'nunkinin **uzerine yazmayin**; ayri klasore koyun.
+`YOLOX_COMMIT.txt` checkpoint ile ayni klasorde olmak zorunda (surum kapisi
+oraya bakar):
+
+```bash
+mkdir -p tiny
+cp <indirdiginiz>/best_ckpt.pth tiny/best_ckpt.pth
+cp YOLOX_COMMIT.txt tiny/
+```
+
+`yolox_tiny_visdrone.py` ve `yolox_nano_visdrone.py` ayni klasorde olmali --
+Tiny exp'i Nano exp'ini import eder (ortak girdi boyutu, sinif semasi, ReLU,
+DPUFocus; tek degisken mimari olsun diye).
+
+### 9.2 Ayri cikti klasoru
+
+```bash
+ARGS_T="--exp-file yolox_tiny_visdrone.py --ckpt tiny/best_ckpt.pth --data-dir datasets/merged --output build/quant_tiny"
+```
+
+`--output` ayri oldugu icin Nano'nun kalibrasyonu ve accuracy gate'i
+bozulmaz; iki sonucu yan yana karsilastirabilirsiniz.
+
+### 9.3 Ayni merdiven, AdaQuant YOK
+
+```bash
+python quantize_yolox.py --inspect $ARGS_T
+python quantize_yolox.py --quant-mode float $ARGS_T
+python quantize_yolox.py --quant-mode calib --subset-len 300 --calib-dir calib_images $ARGS_T
+python quantize_yolox.py --quant-mode test --float-map <TINY_FLOAT_AP> $ARGS_T
+```
+
+`--float-map` degerini adim 2'nin (`--quant-mode float`) ciktisindan alin --
+Nano'nun 0.5874'unu **kullanmayin**, Tiny'nin kendi float AP'si farklidir.
+
+**AdaQuant (`--fast-finetune`) eklemeyin.** Nano'da olculdu: 2 sa 14 dk
+surdu ve hicbir sey kazandirmadi (0.3589 -> 0.3568). Tiny'de belirleyici
+olan kalibrasyon degil mimari.
+
+> ⚠️ Tiny ~5M parametre (Nano 0,9M, 5,6 kat). INT8 kapiyi gecse bile
+> **30 FPS butcesi kartta yeniden olculmelidir.**
+
+## 10. (opsiyonel) QAT yapilabilir mi? -- ONCE OLCUN
+
+PTQ merdiveni Nano'da tukendi (CLE + bias correction + AdaQuant, kayip
+0.2306). Kalan vendor yolu QAT ama QAT bir **egitim** islemi. Bu VM'de GPU
+yok (VirtualBox NVIDIA passthrough yapmaz), yani CPU'da koser.
+
+Kac saat surecegini tahmin etmeyin, olcun:
+
+```bash
+python qat_probe.py --exp-file yolox_nano_visdrone.py \\
+    --ckpt best_ckpt.pth --data-dir datasets/merged --batch-size 4
+```
+
+Birkac dakikada biter ve sn/iterasyon + toplam saat projeksiyonu verir.
+Cikan sayiyi paylasin; QAT portunu ona gore boyutlandiracagiz.
+
+> QAT'in kendisi icin **etiketli egitim verisi** gerekir; bu pakette yok
+> (yalnizca val + etiketsiz kalibrasyon kareleri var). Probe olcumu val
+> setinden yapar, ek veri istemez.
 
 ## Sonra
 

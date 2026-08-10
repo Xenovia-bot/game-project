@@ -31,7 +31,8 @@ noktası:
 | nerede | ne | durum |
 | --- | --- | --- |
 | VM docker | Nano · PTQ merdiveninin tamamı | ✅ **bitti — kapı geçilmedi, kayıp 0.2306** |
-| Kaggle | **Tiny** eğitimi (`VARIANT = "tiny"`, 40 epoch) | 🔵 koşuyor, ~5 sa |
+| Kaggle | **Tiny** eğitimi (40 epoch) | ✅ **bitti** 2026-08-09 23:12 · float AP **0.6435** (§5) |
+| VM docker | **Tiny** PTQ merdiveni | ⬜ **sıradaki iş** — `--float-map 0.6435` |
 
 **Nano kapandı.** CLE + bias correction + AdaQuant hepsi uygulandı, AdaQuant
 hiç kazandırmadı (§5). Sorun kalibrasyonda değil, depthwise conv'ların
@@ -43,25 +44,53 @@ bantta.
 
 ### Sıradaki üç yol (öncelik sırasıyla)
 
-**1. YOLOX-Tiny — koşuyor, bedava.** Kaggle'da eğitim bitince artifacts'ı VM'e
-taşı ve aynı adımları tekrarla:
+**1. YOLOX-Tiny — eğitimi BİTTİ, sıradaki iş VM'de PTQ.** Float AP 0.6435,
+her eksende Nano'nun üstünde (§5). Checkpoint'i Nano'nunkinin **üstüne
+yazmayın**, ayrı klasöre koyun; `YOLOX_COMMIT.txt` ckpt ile aynı klasörde
+olmalı. `yolox_tiny_visdrone.py` Nano exp'ini import eder → ikisi yan yana
+durmalı ve Nano exp'i **repo sürümü** olmalı (artifacts kopyası
+`get_model()` içinde `depthwise=True` sabitini taşıyor; Tiny onun yanında
+depthwise'lı kurulur):
 ```
-export ARGS="--exp-file yolox_tiny_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/merged"
-python quantize_yolox.py --inspect $ARGS
-python quantize_yolox.py --quant-mode float $ARGS          # float AP'yi not et
-python quantize_yolox.py --quant-mode calib --subset-len 300 --calib-dir calib_images $ARGS
-python quantize_yolox.py --quant-mode test --float-map <FLOAT_AP> $ARGS
+ARGS_T="--exp-file yolox_tiny_visdrone.py --ckpt tiny/best_ckpt.pth --data-dir datasets/merged --output build/quant_tiny"
+python quantize_yolox.py --inspect $ARGS_T
+python quantize_yolox.py --quant-mode float $ARGS_T        # 0.6435 beklenir
+python quantize_yolox.py --quant-mode calib --subset-len 300 --calib-dir calib_images $ARGS_T
+python quantize_yolox.py --quant-mode test --float-map 0.6435 $ARGS_T
 ```
+`--output` ayrı olduğu için Nano'nun kalibrasyonu bozulmaz, iki sonuç yan
+yana karşılaştırılabilir.
 **AdaQuant'a gerek yok** — Nano'da hiç kazandırmadığı ölçüldü. Tiny'de
 belirleyici olan kalibrasyon değil mimari (depthwise yok).
-⚠️ ~5M parametre → **30 FPS bütçesi kartta yeniden ölçülmeli.**
+⚠️ 5,03M parametre → **30 FPS bütçesi kartta yeniden ölçülmeli** (§5).
 
-**2. QAT — vendor'ın kanıtlanmış yolu, donanım var.** AMD'de 0.136 → 0.210
-(%95 geri kazanım). Gereken her şey mevcut: RTX 4050 (6 GB), Docker Desktop +
-WSL2 kurulu, 56,8 GB boş disk. Vitis AI **GPU** docker'ı çekilip
-`W_QUANT=1` ile QAT yapılır; AMD'nin exp'leri Model Zoo paketinde
-(`code/exps/example/custom/yolox_nano_deploy_relu_qat.py`, `code/run_qat.sh`).
-Kısıt: 6 GB VRAM → 896×512'de batch ~4-6.
+**2. QAT — vendor'ın kanıtlanmış yolu, ama GPU sorunu var.** AMD'de
+0.136 → 0.210 (%95 geri kazanım). AMD'nin exp'leri Model Zoo paketinde ve
+**yerelde çıkarıldı** (`C:\Users\emrez\AppData\Local\Temp\zoo_yolox.zip`).
+Yama küçük ve `_q` dosyaları baz dosyalarla diff'lendi (2026-08-10):
+
+| dosya | değişiklik |
+| --- | --- |
+| `yolox_q.py` | girişe `nndct_nn.QuantStub()` (+4 satır) |
+| `yolo_head_q.py` | seviye başına `QF.Cat()` + `DeQuantStub()`; sigmoid `postprocess()`'e taşınmış (~20 satır) |
+| `yolo_pafpn_deploy_q.py` | her `torch.cat` → `QF.Cat()`, `CSPLayer` → `Q_CSPLayer` (~23 satır) |
+| exp | `QatProcessor(model, dummy, bitwidth=8)` + `trainable_model(calib_dir=…)` + optimizer'a `threshold` param grubu (`lr × thresh_lr_scale`, AMD 10 kullanıyor) |
+
+Uyarlarken **bizim 9 tensörlü çıktımız korunmalı**: AMD head'de `QF.Cat` ile
+7 kanala birleştiriyor, biz ölçtük ki ayırmak +0.13 AP kazandırıyor (§5).
+Doğru uyarlama: `DeQuantStub()`'ları cat'ten **önce**, 9 conv çıktısına koymak.
+AMD ayrıca Focus'u düz `BaseConv(3,ch,k=3,s=2)` ile değiştirmiş; bizim
+DPUFocus zaten `--inspect`'ten geçtiği için buna gerek yok.
+
+🔴 **Kısıt: VM'de GPU yok.** VirtualBox NVIDIA passthrough yapmaz, yani QAT
+VM'de CPU'da koşar. Windows host'ta RTX 4050 (6 GB) var ama **Vitis AI 3.0
+GPU imajı hazır değil** — resmi dokümana göre `./docker_build.sh -t gpu -f
+pytorch` ile derlenmeli ve "birkaç saat sürebilir" (`docsrc/source/docs/
+install/install.rst`, v3.0). C:'de 56,8 GB boş, sınırda.
+**Karar verilmeden önce ölç:** `quantize/qat_probe.py` VM'de sn/iterasyon ve
+toplam saat projeksiyonu verir (float ileri / float ileri+geri / QAT
+ileri+geri). QAT'in kendisi ayrıca **etiketli eğitim verisi** ister;
+`vm_package` bunu içermiyor (probe istemiyor).
 
 **3. Kaybı bilinçli kabul et.** Nano INT8'i 0.3568 ile kullan, rapora
 gerekçesiyle yaz. Ölçüm ve vendor karşılaştırması zaten elde — bu bir
@@ -173,6 +202,47 @@ verir ve ~1,2 saat kazandırır.
 > VisDrone; (3) `sea_vehicle` 0.95'i tek limanın ezberlenmesi
 > (bkz. §4). `land_vehicle` 0.78 nispeten gerçek: val land kutularının
 > %91'i VisDrone'dan. Raporda bu üç uyarı mutlaka yer almalı.
+
+### 🎯 YOLOX-TINY FLOAT SONUCU — 2026-08-09 23:12, T4, aynı veri/takvim
+
+Aynı val seti, aynı `eval.py --conf 0.001`, aynı ignore + top-500 + VOC AP.
+Tek değişken **mimari** (width 0.375, `depthwise=False`); girdi boyutu, sınıf
+şeması, ReLU, DPUFocus ve 40 epoch takvimi Nano exp'inden devralınıyor.
+
+| | Nano | **Tiny** | fark |
+| --- | --- | --- | --- |
+| AP@[.50:.95] | 0.5874 | **0.6435** | +0.0561 (%9,6) |
+| AP@0.50 | 0.8659 | **0.9070** | +0.0411 |
+| **AP@0.75** | 0.6578 | **0.7356** | **+0.0778 (%11,8)** |
+| `land_vehicle` AP / AP50 | 0.4796 / 0.7807 | 0.5527 / 0.8452 | +0.0731 / +0.0645 |
+| `sea_vehicle` AP / AP50 | 0.6952 / 0.9512 | 0.7343 / 0.9689 | +0.0391 / +0.0177 |
+| En iyi F1 | 0.8274 @conf 0.46 | 0.8761 @conf 0.47 | +0.0487 |
+| conf 0.15: F1 / P / R | 0.7669 / 0.6911 / 0.8685 | 0.8310 / 0.7687 / 0.9075 | +0.0641 |
+| T4 forward + NMS | 3,74 + 1,29 ms | 6,33 + 1,25 ms | 1,69× |
+| parametre / GMAC | 0,90M / ~3 | 5,03M / 17,09 | 5,6× / 5,6× |
+
+En çok kazanan eksen **AP@0.75**, yani konumlandırma — INT8'in Nano'da en çok
+yıktığı eksen de buydu.
+
+**Eğitim log'undaki yapı dökümü doğru exp'i kanıtlıyor** (ayrı kontrol
+gerekmez): modelde tek bir `DWConv` yok, `stem` = `DPUFocus`
+(`Conv2d(3,12,k=2,s=2)` + `BaseConv(12,24,k=3)`), tüm aktivasyonlar ReLU,
+`cls_preds` 2 + `reg_preds` 4 + `obj_preds` 1 = 7 kanal, 5,03M parametre
+(yerelde doğrulanan 5.033.301 ile birebir).
+
+> ⚠️ **INT8 kabul kapısı yine 0.02.** Tiny'nin geçmesi için INT8 AP ≥ 0.6235
+> olmalı. Depthwise'sız bir dedektörde tipik PTQ kaybı 0.01-0.03 bandındadır,
+> yani **geçme ihtimali gerçek ama garanti değil.** Kayıp 0.02-0.03 çıkarsa
+> bu bir başarısızlık değil; `--max-map-drop`'u bilinçli gevşetme kararı
+> kullanıcıya aittir ve rapora gerekçesiyle yazılır.
+
+> ⚠️ **30 FPS bütçesi açık risk.** Kaba üst sınır: B4096 @300 MHz ≈ 1,2 TOPS
+> tepe. YOLOX'un bildirdiği 17,09 "GFLOP" aslında thop'un MAC sayısıdır
+> (~34 GOP) → tepe hızda bile ~28 ms/kare ≈ 35 FPS tavan; sayı OP olarak
+> okunursa ~14 ms ≈ 70 FPS. Gerçek DPU verimi her iki durumda da tepenin
+> belirgin altındadır. **Kartta ölçülmeden 30 FPS varsayılmamalı**;
+> gerekirse çözünürlük düşürme veya Nano'ya dönme kararı bu ölçümden sonra
+> verilir. (Nano T4'te 3,74 ms, Tiny 6,33 ms — ölçülmüş tek oran 1,69×.)
 
 ### ✅ DPU UYUMLULUK KAPISI GEÇTİ — 2026-08-09, Vitis AI 3.0 Inspector
 
@@ -596,12 +666,10 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 1. ~~Kaggle eğitimi~~ ✅ **bitti** 2026-08-09, sonuçlar §5'te. Taban çizgisi
    artık var: mendeley temizliğinin (§4) fayda edip etmediği buna karşı
    ölçülebilir. `yolox_aerial_artifacts.zip` Kaggle Output'tan indirilecek.
-2. **VM**: `quantize/README.md`. `--inspect` ile kare olmayan girdinin tek DPU
-   subgraph'ine derlendiğini doğrula. VM'e `datasets/merged/images` ağacı ve
-   `instances_val.json` lazım (kalibrasyonu train'den yapmak için
-   `instances_train.json` da). **Açık soru:** INT8 kabul testi 4.483 görüntü
-   üzerinde CPU'da saatler sürer ve `--subset-len` bilerek yasak.
-   **Float AP referansı: `--float-map 0.5874`** (§5).
+2. **VM**: ~~Nano PTQ~~ ✅ bitti, kapı geçilmedi (§5). **Aktif iş: Tiny PTQ**,
+   komutlar §0'da, `--float-map 0.6435`. `vm_package/KOMUTLAR.md` adım 9
+   aynısını taşıyor. INT8 kabul testi 4.483 görüntü üzerinde CPU'da saatler
+   sürer ve `--subset-len` bilerek yasak (gate alt küme kabul etmez).
 3. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
 4. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı.
 5. **Rapor**: `docs/report_template.md` (§5'teki sayılar ve üç uyarı ile).
