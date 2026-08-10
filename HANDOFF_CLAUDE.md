@@ -1,7 +1,13 @@
 # Claude Handoff — KV260 YOLOX-Nano · Havadan Araç Tespiti
 
 **Bu dosyayı yeni oturumda ilk okuyun.** Ardından `README.md`.
-Workspace: `C:\Users\emrez\proje` · Dil: **Türkçe** · Git: yerel repo var, uzak yok.
+Workspace: `C:\Users\emrez\proje` · Dil: **Türkçe**
+Git: `origin` = https://github.com/Xenovia-bot/game-project.git (adı yanıltıcı
+ama **bu projenin reposu**; 2026-08-10'da doğrulandı — uzaktaki `main` yerel
+geçmişle birebir). Önceki handoff "uzak yok" diyordu, **yanlıştı.**
+Ağırlıklar bilerek repoda değil: `.gitignore` `*.pth`, `artifacts/`, `*.zip`
+ve `datasets/` hariç tutuyor. Checkpoint'ler VM'e paylaşılan klasör/scp ile
+taşınır, git ile değil.
 
 ---
 
