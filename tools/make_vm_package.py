@@ -53,6 +53,9 @@ def main():
                         help="birlestirilmis veri seti koku")
     parser.add_argument("--artifacts", default=str(ROOT / "artifacts"),
                         help="Kaggle artifacts klasoru (best_ckpt.pth vs.)")
+    parser.add_argument("--artifacts-tiny", default=str(ROOT / "artifacts_tiny"),
+                        help="Tiny checkpoint klasoru; varsa vm_package/tiny/ "
+                             "olarak kopyalanir (yoksa sessizce atlanir)")
     parser.add_argument("--out", default=str(ROOT / "vm_package"))
     parser.add_argument("--calib", type=int, default=300,
                         help="kalibrasyon icin secilecek train goruntusu sayisi")
@@ -98,6 +101,21 @@ def main():
     for name, src in needed.items():
         shutil.copy2(src, out / name)
     print(f">> {len(needed)} kaynak dosya kopyalandi")
+
+    # --- Tiny checkpoint: varsa ayri klasorde tasinir ---
+    # Nano'nunkinin uzerine YAZILMAZ; ikisi yan yana durup karsilastirilabilsin.
+    # YOLOX_COMMIT.txt kopyalanmak zorunda: verify_yolox_version() onu
+    # checkpoint ile ayni klasorde arar.
+    tiny_src = Path(args.artifacts_tiny)
+    tiny_ckpt = tiny_src / "best_ckpt.pth"
+    if tiny_ckpt.is_file():
+        tiny_out = out / "tiny"
+        tiny_out.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tiny_ckpt, tiny_out / "best_ckpt.pth")
+        shutil.copy2(needed["YOLOX_COMMIT.txt"], tiny_out / "YOLOX_COMMIT.txt")
+        print(f">> Tiny checkpoint  : {tiny_ckpt.stat().st_size/1e6:.0f} MB -> {tiny_out}")
+    else:
+        print(f">> Tiny checkpoint  : yok ({tiny_ckpt}), atlandi")
 
     # --- val: TAMAMI (accuracy gate alt kume kabul etmiyor) ---
     target_ann = out / "datasets" / "merged" / "annotations"

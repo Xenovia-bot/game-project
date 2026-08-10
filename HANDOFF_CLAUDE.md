@@ -1,4 +1,7 @@
-# Claude Handoff — KV260 YOLOX-Nano · Havadan Araç Tespiti
+# Claude Handoff — KV260 YOLOX · Havadan Araç Tespiti
+
+> **Aktif model: YOLOX-Tiny.** Nano kapandı (INT8'e kuantalanamıyor, §5).
+> Belgede "Nano" geçen yerler tarihsel kayıttır; yeni iş Tiny üzerinden.
 
 **Bu dosyayı yeni oturumda ilk okuyun.** Ardından `README.md`.
 Workspace: `C:\Users\emrez\proje` · Dil: **Türkçe**
@@ -23,30 +26,47 @@ noktası:
 
 `cx = (x1+x2)/2`, `cy = (y1+y2)/2` → `centers.csv` + `out.avi` + FPS özeti.
 
-Çalışma noktası: **896×512 girdi, 40 epoch, conf 0.15, IoU tabanlı takip, ≥30 FPS.**
+Çalışma noktası: **896×512 girdi, 40 epoch, conf 0.15, IoU tabanlı takip.**
+
+> **30 FPS artık sabit değil, AÇIK KARAR** (2026-08-10'da kullanıcıyla
+> netleşti). Tiny 5,6× daha ağır; gerçek sayı kartta ölçülecek, karar ondan
+> sonra verilecek. Altında kalırsa seçenekler: çözünürlük düşürmek, Nano'ya
+> dönüp kaybı kabul etmek, ya da ölçülen FPS'i olduğu gibi rapora yazmak.
+> **Kartta ölçülmeden 30 FPS ne vaat edilmeli ne varsayılmalı.**
 
 > Taksonomi bu noktaya gelene kadar **beş kez** değişti (10 sınıf → 2 → 4 → 3
 > → tek sınıf ship → 2 sınıf). Kullanıcı her turda fikir değiştirdi ve hiç
 > eğitim yapılmadı. **Yeni bir taksonomi önerisi gelirse önce "önce bir kez
 > uçtan uca çalıştıralım" deyin.**
 
-## 0. ŞU AN NE OLUYOR (2026-08-09 akşamı)
+## 0. ŞU AN NE OLUYOR (2026-08-10)
 
-**İki iş paralel koşuyor:**
+| ne | durum |
+| --- | --- |
+| Nano · PTQ merdiveninin tamamı | ✅ bitti — **kapı geçilmedi**, kayıp 0.2306. Nano kapandı. |
+| Tiny · Kaggle eğitimi (40 epoch) | ✅ bitti 2026-08-09 23:12 · float AP **0.6435** (§5) |
+| Tiny · VM `--inspect` | ✅ **geçti** 2026-08-10 · tüm op'lar DPU'da, 463/463 katman |
+| Tiny · VM float AP | 🔵 **koşuyor** — 0.6435 çıkmalı |
+| Tiny · kalibrasyon + INT8 kapısı | ⬜ sıradaki |
+| Kart · FPS + golden test | ⬜ |
+| Rapor | ⬜ |
 
-| nerede | ne | durum |
-| --- | --- | --- |
-| VM docker | Nano · PTQ merdiveninin tamamı | ✅ **bitti — kapı geçilmedi, kayıp 0.2306** |
-| Kaggle | **Tiny** eğitimi (40 epoch) | ✅ **bitti** 2026-08-09 23:12 · float AP **0.6435** (§5) |
-| VM docker | **Tiny** PTQ merdiveni | ⬜ **sıradaki iş** — `--float-map 0.6435` |
-
-**Nano kapandı.** CLE + bias correction + AdaQuant hepsi uygulandı, AdaQuant
-hiç kazandırmadı (§5). Sorun kalibrasyonda değil, depthwise conv'ların
-per-tensor 8 bitte temsil edilemiyor olmasında.
+**Nano neden kapandı:** CLE + bias correction + AdaQuant hepsi uygulandı,
+AdaQuant hiç kazandırmadı (§5). Sorun kalibrasyonda değil, depthwise
+conv'ların per-tensor 8 bitte temsil edilemiyor olmasında.
 
 **Ama bu bir başarısızlık değil:** AMD'nin kendi YOLOX-Nano'su aynı DPU'da
 PTQ ile %38,2 kaybediyor, bizimki %39,3 (§5). Vendor sayısıyla birebir aynı
 bantta.
+
+### 🔑 Açık kararlar ve açık işler (2026-08-10'da kullanıcıyla netleşti)
+
+| konu | karar |
+| --- | --- |
+| **30 FPS** | **Açık.** Kartta ölçülecek, sonra karar verilecek (§1). |
+| **Tiny INT8 kapıyı geçemezse** | **Önce QAT denenecek** (§0 yol 2). Kaybı kabul etmek son çare. |
+| **Test videosu** | 🔴 **YOK, bulunması gerekiyor.** Havadan çekim araç videosu. Kart adımı ve FPS ölçümü buna bağlı — bloklayıcı. |
+| **Mendeley temizliği** (§4, görüntülerin %77'si konu dışı) | Tiny INT8 sonucundan **sonra** karar. Taban çizgisi var, faydası ölçülebilir; bedeli ~5 sa yeniden eğitim. |
 
 ### Sıradaki üç yol (öncelik sırasıyla)
 
@@ -98,9 +118,11 @@ toplam saat projeksiyonu verir (float ileri / float ileri+geri / QAT
 ileri+geri). QAT'in kendisi ayrıca **etiketli eğitim verisi** ister;
 `vm_package` bunu içermiyor (probe istemiyor).
 
-**3. Kaybı bilinçli kabul et.** Nano INT8'i 0.3568 ile kullan, rapora
-gerekçesiyle yaz. Ölçüm ve vendor karşılaştırması zaten elde — bu bir
-eksiklik değil, belgelenmiş bir mühendislik sınırı.
+**3. Kaybı bilinçli kabul et — SON ÇARE.** Kullanıcı 2026-08-10'da "önce
+QAT'i dene" dedi, yani bu yol ancak QAT de yetmezse. O noktada en iyi INT8
+sonucu olduğu gibi karta konur ve kayıp rapora gerekçesiyle yazılır. Ölçüm
+ve vendor karşılaştırması zaten elde — bu bir eksiklik değil, belgelenmiş
+bir mühendislik sınırı.
 
 **Kod tarafında bekleyen iş yok.** Dağıtım zinciri 9 tensörlü çıktıya taşındı:
 
@@ -121,9 +143,11 @@ eksiklik değil, belgelenmiş bir mühendislik sınırı.
 | Aşama | Durum |
 | --- | --- |
 | Veri birleştirme | ✅ **bitti, doğrulandı** (19.476 train / 4.483 val) |
-| Kaggle eğitimi (2 sınıf) | ✅ **bitti** 2026-08-09 · 40/40 epoch · **4,9 saat** (T4) · AP@0.50 = **0.8659** |
-| Oracle VM · Vitis AI 3.0 PTQ | 🔵 **başladı** — `--inspect` ✅ geçti (aşağı bkz.), sırada float AP |
-| KV260 · C++ VART + golden test | ⬜ — **kart kurulumu ZATEN HAZIR** (aşağı bkz.) |
+| Kaggle eğitimi · Nano | ✅ bitti 2026-08-09 · 40/40 epoch · 4,9 sa (T4) · AP 0.5874 |
+| Kaggle eğitimi · **Tiny** | ✅ bitti 2026-08-09 · **AP 0.6435** (§5) |
+| VM · Vitis AI 3.0 PTQ · Nano | ✅ bitti — **INT8 kapısı reddetti**, kayıp 0.2306 |
+| VM · Vitis AI 3.0 PTQ · **Tiny** | 🔵 koşuyor — `--inspect` ✅, float AP sırada |
+| KV260 · C++ VART + golden test | ⬜ — kart kurulumu hazır, **test videosu yok** (§0) |
 | Rapor | ⬜ |
 
 ## 3. Veri seti (tamamlandı)
@@ -422,8 +446,9 @@ QAT ağırlıklarını (`qat/qat.pth`) ve PTQ sonucunu içeriyor — ama **COCO
 | Disk | ⚠️ C:'de 56,8 GB boş; Vitis AI GPU imajı büyük |
 | VRAM kısıtı | 6 GB → 896×512'de batch ~4-6 (AMD 8 GPU'da 128 kullandı) |
 
-**Sıralama:** önce Tiny (koşuyor, bedava), yetmezse QAT (vendor'ın kanıtlanmış
-yolu).
+**Sıralama (2026-08-10'da kullanıcı onayladı):** önce Tiny PTQ, yetmezse
+**QAT**, o da yetmezse kaybı kabul et. QAT'e girmeden önce `qat_probe.py`
+ile VM'de sn/iterasyon ölçülmeli — GPU olmadığı için maliyet bilinmiyor.
 
 ### ⛔ Vitis AI sürüm tavanı: 3.0'da kalıyoruz (ölçüldü)
 
@@ -669,16 +694,18 @@ eder. Ayrıca AGPL-3.0. Doğruluk yetmezse doğru yükseltme **YOLOX-Tiny**.
 
 ## 9. Sıradaki adımlar
 
-1. ~~Kaggle eğitimi~~ ✅ **bitti** 2026-08-09, sonuçlar §5'te. Taban çizgisi
-   artık var: mendeley temizliğinin (§4) fayda edip etmediği buna karşı
-   ölçülebilir. `yolox_aerial_artifacts.zip` Kaggle Output'tan indirilecek.
-2. **VM**: ~~Nano PTQ~~ ✅ bitti, kapı geçilmedi (§5). **Aktif iş: Tiny PTQ**,
-   komutlar §0'da, `--float-map 0.6435`. `vm_package/KOMUTLAR.md` adım 9
-   aynısını taşıyor. INT8 kabul testi 4.483 görüntü üzerinde CPU'da saatler
-   sürer ve `--subset-len` bilerek yasak (gate alt küme kabul etmez).
-3. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
-4. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı.
-5. **Rapor**: `docs/report_template.md` (§5'teki sayılar ve üç uyarı ile).
+1. ~~Kaggle eğitimi~~ ✅ **bitti** — Nano ve Tiny, sonuçlar §5'te.
+2. **VM · Tiny PTQ** ← **AKTİF İŞ**. Komutlar §0'da, `--float-map 0.6435`.
+   `vm_package/KOMUTLAR.md` adım 9 aynısını taşıyor. INT8 kabul testi 4.483
+   görüntü üzerinde CPU'da saatler sürer; `--subset-len` bilerek yasak
+   (gate alt küme kabul etmez). Kapı geçilmezse → **QAT** (§0 yol 2).
+3. **Test videosu bul** 🔴 — havadan çekim araç videosu. Kart adımını
+   bloklar; PTQ koşarken paralel halledilebilir.
+4. **Kart**: `deploy/README.md` + golden test + **gerçek FPS ölçümü**.
+   FPS bir açık karar (§1), ölçmeden varsayma.
+5. FPS ölçüldükten sonra: gerekirse çözünürlük/tiling kararı, ya da
+   mendeley temizliği + yeniden eğitim (§4).
+6. **Rapor**: `docs/report_template.md` (§5'teki sayılar ve üç uyarı ile).
 
 ## 9b. Kullanıcının hazır ortamı (2026-08-09'da öğrenildi)
 
