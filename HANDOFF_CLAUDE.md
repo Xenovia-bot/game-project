@@ -46,8 +46,8 @@ noktası:
 | Nano · PTQ merdiveninin tamamı | ✅ bitti — **kapı geçilmedi**, kayıp 0.2306. Nano kapandı. |
 | Tiny · Kaggle eğitimi (40 epoch) | ✅ bitti 2026-08-09 23:12 · float AP **0.6435** (§5) |
 | Tiny · VM `--inspect` | ✅ **geçti** 2026-08-10 · tüm op'lar DPU'da, 463/463 katman |
-| Tiny · VM float AP | 🔵 **koşuyor** — 0.6435 çıkmalı |
-| Tiny · kalibrasyon + INT8 kapısı | ⬜ sıradaki |
+| Tiny · VM float AP | ✅ **geçti** 2026-08-10 · 0.6435 / 0.9070 / 0.7356 — Kaggle ile **üç metrikte de birebir** |
+| Tiny · kalibrasyon + INT8 kapısı | ⬜ **sıradaki iş** |
 | Kart · FPS + golden test | ⬜ |
 | Rapor | ⬜ |
 
@@ -253,6 +253,19 @@ Tek değişken **mimari** (width 0.375, `depthwise=False`); girdi boyutu, sını
 
 En çok kazanan eksen **AP@0.75**, yani konumlandırma — INT8'in Nano'da en çok
 yıktığı eksen de buydu.
+
+**VM float kapısı — 2026-08-10, CPU, bağımsız decode:**
+
+| | Kaggle (T4, YOLOX evaluator) | VM (CPU, `quantize_yolox.py`) |
+| --- | --- | --- |
+| AP@[.50:.95] | 0.6435 | **0.6435** |
+| AP@0.50 | 0.9070 | **0.9070** |
+| AP@0.75 | 0.7356 | **0.7356** |
+
+Nano'da olduğu gibi iki bağımsız uygulama aynı sayıyı verdi — ama Nano'da
+iki metrik tutmuştu, burada **üçü de**. `--float-map 0.6435` bu yüzden
+güvenilir. Hız: 939 sn / 4.483 görüntü = **0,21 sn/görüntü** (Nano 0,12 →
+CPU'da 1,75×; T4'te oran 1,69×'tı, iki donanımda tutarlı).
 
 **Eğitim log'undaki yapı dökümü doğru exp'i kanıtlıyor** (ayrı kontrol
 gerekmez): modelde tek bir `DWConv` yok, `stem` = `DPUFocus`
