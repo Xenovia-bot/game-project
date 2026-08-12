@@ -155,8 +155,35 @@ def verify_yolox_version(checkpoint_path):
     print("YOLOX commit dogrulandi:", installed)
 
 
+def _bridge_numpy_core_pickle_name():
+    """Kaggle (numpy 2.x) ile kaydedilmis checkpoint'i eski numpy'de (Vitis AI
+    3.0, numpy 1.x) acar.
+
+    numpy 2.0'da ic modul yolu numpy.core -> numpy._core olarak degisti.
+    torch.load'un pickle'i, kaydedildigi ortamdaki TAM modul yolunu (orn.
+    "numpy._core.multiarray.scalar") arar; eski numpy'de o isim yok, "numpy.core"
+    var. Isim eslemesi (alt cizgi farki) disinda ikisi ayni koddur, o yuzden
+    sys.modules'e takma ad eklemek yeterli -- numpy>=2 kuruluysa (numpy._core
+    zaten var) bu fonksiyon hicbir sey yapmaz.
+    """
+    import numpy
+
+    if hasattr(numpy, "_core"):
+        return
+    import sys
+
+    import numpy.core
+    import numpy.core.multiarray
+
+    sys.modules.setdefault("numpy._core", numpy.core)
+    sys.modules.setdefault("numpy._core.multiarray", numpy.core.multiarray)
+    if hasattr(numpy.core, "umath"):
+        sys.modules.setdefault("numpy._core.umath", numpy.core.umath)
+
+
 def safe_torch_load(path):
     """PyTorch 1.12 ve 2.6+ ile ayni checkpoint yukleme davranisi."""
+    _bridge_numpy_core_pickle_name()
     try:
         return torch.load(path, map_location="cpu", weights_only=False)
     except TypeError:  # Vitis AI 3.0 / PyTorch 1.12
