@@ -52,8 +52,30 @@ import importlib.util
 import json
 import random
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+# YOLOX'un utils/__init__.py'si mlflow_logger.py'yi kosulsuz import eder, o da
+# stdlib importlib.metadata'yi kullanir (Python 3.8+). Vitis AI 3.0 docker
+# imajinin conda ortami Python 3.7 tasidigi icin bu import patlar ve TUM
+# yolox.utils (bize gerekli xyxy2cxcywh dahil) beraberinde patlar. YOLOX
+# kaynagina dokunmuyoruz -- verify_yolox_version() yalnizca git commit
+# hash'ine bakiyor, dosya icerigine degil; kaynagi patch'lersek hash ayni
+# kalir ama "degistirilmemis YOLOX" garantisi sessizce bozulur. Bunun yerine
+# gercek importlardan ONCE, yalnizca eksikse, backport'u sys.modules'e
+# enjekte ediyoruz -- Python 3.8+'ta bu blok hicbir sey yapmaz.
+try:
+    import importlib.metadata  # noqa: F401
+except ModuleNotFoundError:
+    try:
+        import importlib_metadata
+    except ModuleNotFoundError:
+        raise SystemExit(
+            "HATA: Python < 3.8 ve 'importlib_metadata' backport'u kurulu "
+            "degil. Once calistirin: pip install importlib_metadata"
+        )
+    sys.modules["importlib.metadata"] = importlib_metadata
 
 import cv2
 import numpy as np
