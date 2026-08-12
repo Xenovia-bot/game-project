@@ -1,7 +1,13 @@
 # Oracle VM'de Kuantalama ve Derleme (Vitis AI 3.0)
 
-Amaç: Kaggle'da eğitilen float YOLOX-Nano modelini INT8'e kuantalamak, doğruluğunu
-ölçmek ve KV260 DPU'su (DPUCZDX8G B4096) için `.xmodel`'e derlemek.
+Amaç: Kaggle'da eğitilen float YOLOX-Tiny **gemi tespiti** modelini (tek sınıf
+`ship`) INT8'e kuantalamak, doğruluğunu ölçmek ve KV260 DPU'su
+(DPUCZDX8G B4096) için `.xmodel`'e derlemek.
+
+Ölçülen metrik: standart COCO mAP (AP@[.50:.95], AP@0.50, AP@0.75) **ve**
+kartın çalışma noktasında (conf=0.15) precision/recall/F1. AP tanımı
+Kaggle'daki eğitim değerlendirmesiyle aynıdır; float ↔ INT8 ↔ Kaggle
+sayıları ancak bu sayede karşılaştırılabilir.
 
 > Sürüm kuralı: KV260 hazır kart imajı Vitis AI **3.0** olduğundan docker da
 > **3.0** etiketiyle çekilir. `:latest` etiketi 3.5'e işaret eder, kullanmayın.
@@ -38,25 +44,26 @@ docker pull xilinx/vitis-ai-pytorch-cpu:ubuntu2004-3.0.0.106
 
 ```
 Vitis-AI/
-└── yolox_visdrone/
+└── yolox_ship/
     ├── quantize_yolox.py            # bu klasördeki dosya
     ├── compile_kv260.sh             # bu klasördeki dosya
     ├── best_ckpt.pth                # Kaggle artifacts.zip içinden
-    ├── yolox_nano_visdrone.py       # Kaggle artifacts.zip içinden
-    ├── visdrone_eval.py             # resmi DET tarzı AP@500 değerlendirici
+    ├── yolox_tiny_ship.py           # Kaggle artifacts.zip içinden
+    ├── ship_metrics.py              # mAP + F1 modülü (artifacts.zip içinden)
     ├── YOLOX_COMMIT.txt             # iki ortamda aynı kaynak sürümü
-    └── datasets/merged/
+    └── datasets/ship_merged/
         ├── annotations/instances_val.json     # artifacts.zip içinden
+        ├── annotations/instances_test.json    # nihai rapor için
         ├── annotations/instances_train.json   # isteğe bağlı (kalibrasyon için)
         └── images/<kaynak>/<ad>.jpg           # Kaggle'daki merged/images ağacı
 ```
 
-> **Anotasyon üretmeyin.** Veri seti Kaggle'da `build_dataset.py` ile bir kez
-> üretildi; `instances_val.json` artifacts paketinden gelir. VM'de yeniden
+> **Anotasyon üretmeyin.** Veri seti Kaggle'da `build_ship_dataset.py` ile bir kez
+> üretildi; `instances_val.json` / `instances_test.json` artifacts paketinden gelir. VM'de yeniden
 > üretmek bölmeyi değiştirir ve float ↔ INT8 karşılaştırmasını geçersiz kılar.
 
 Görüntüler: `quantize_yolox.py`, COCO `file_name` alanlarını doğrudan
-`images/` kökünün altında arar (`images/visdrone/xxx.jpg` gibi), bu yüzden
+`images/` kökünün altında arar (`images/ir_thermal/xxx.jpg` gibi), bu yüzden
 ağacı **düzleştirmeyin**.
 
 Kalibrasyon kaynağı sırayla seçilir:
@@ -66,7 +73,7 @@ Kalibrasyon kaynağı sırayla seçilir:
 3. o da yoksa `images/` ağacının tamamı — bu durumda val görüntüleri de
    kalibrasyona karışır ve script bunu uyarı olarak yazar.
 
-`instances_train.json` (~30 MB) Kaggle çıktısında `datasets/merged/annotations/`
+`instances_train.json` Kaggle çıktısında `datasets/ship_merged/annotations/`
 altındadır; 2. yolu kullanmak için onu da kopyalayın.
 
 ## 5. Docker'ı başlat
@@ -76,7 +83,7 @@ cd ~/Vitis-AI
 ./docker_run.sh xilinx/vitis-ai-pytorch-cpu:ubuntu2004-3.0.0.106
 # docker içinde:
 conda activate vitis-ai-pytorch
-cd /workspace/yolox_visdrone
+cd /workspace/yolox_ship
 ```
 
 ## 6. Docker içinde YOLOX'u kur (hazır torch sürümüne dokunmadan)
@@ -109,20 +116,22 @@ Kuantalamaya girmeden önce dosyaların yerinde olduğunu görün — INT8 AP te
 saatler sürer, yarısında dosya eksiği çıkması pahalıya patlar:
 
 ```bash
-cd /workspace/yolox_visdrone
-test -f datasets/merged/annotations/instances_val.json
-python -c "import json;d=json.load(open('datasets/merged/annotations/instances_val.json'));print(len(d['images']),'goruntu',len(d['annotations']),'kutu',[c['name'] for c in d['categories']])"
+cd /workspace/yolox_ship
+test -f datasets/ship_merged/annotations/instances_val.json
+test -f ship_metrics.py   # yoksa ölçüm adımları ImportError ile durur
+python -c "import json;d=json.load(open('datasets/ship_merged/annotations/instances_val.json'));print(len(d['images']),'goruntu',len(d['annotations']),'kutu',[c['name'] for c in d['categories']])"
 ```
 
-Beklenen çıktı: `4483 goruntu 21681 kutu ['land_vehicle', 'sea_vehicle']`.
-Sınıf adları farklı çıkarsa yanlış anotasyon dosyasıdır; devam etmeyin.
+Beklenen çıktı: `7622 goruntu 17168 kutu ['ship']` (2026-08-12 tarihli veri
+üretiminden; kendi çalıştırmanızın özeti farklıysa oradaki sayıyı esas alın).
+Sınıf adı `ship` değilse yanlış anotasyon dosyasıdır; devam etmeyin.
 
 ## 8. Kuantalama akışı
 
 Ortak argümanlar her komutta aynıdır:
 
 ```bash
-ARGS="--exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/merged"
+ARGS="--exp-file yolox_tiny_ship.py --ckpt best_ckpt.pth --data-dir datasets/ship_merged"
 ```
 
 1. (İsteğe bağlı) DPU uyumluluk raporu — tüm katmanların DPU'ya atandığını doğrular:
@@ -131,12 +140,12 @@ ARGS="--exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets
 python quantize_yolox.py --inspect $ARGS
 ```
 
-2. Float AP@500 — Kaggle'daki değerle aynı çıkmalı (sağlama). Çıkan değeri
-   `FLOAT_AP` değişkenine yazın:
+2. Float ölçüm — Kaggle'daki AP ile aynı çıkmalı (sağlama). Çıkan
+   `AP@[.50:.95]` değerini `FLOAT_AP` değişkenine yazın:
 
 ```bash
 python quantize_yolox.py --quant-mode float $ARGS
-FLOAT_AP=BURAYA_AP500_DEGERINI_YAZIN
+FLOAT_AP=BURAYA_AP_DEGERINI_YAZIN
 ```
 
 3. Kalibrasyon (PTQ, ~300 görüntü; CPU'da 10-30 dk):
@@ -145,7 +154,7 @@ FLOAT_AP=BURAYA_AP500_DEGERINI_YAZIN
 python quantize_yolox.py --quant-mode calib --subset-len 300 $ARGS
 ```
 
-4. INT8 AP@500 ölçümü (**4483 val görüntüsü**; CPU'da saatler sürer — `screen`
+4. INT8 ölçümü ve kabul kapısı (**7622 val görüntüsü**; CPU'da saatler sürer — `screen`
    veya `nohup` altında başlatın, oturum kopunca ölçüm de kaybolur):
 
 ```bash
@@ -174,21 +183,36 @@ python quantize_yolox.py --quant-mode test --deploy --subset-len 1 --batch-size 
 
 Fast-finetune kullandıysanız export komutuna da `--fast-finetune` ekleyin.
 
+6. **Raporlanacak nihai sayı — test setinde, yalnızca bir kez.**
+
+Model seçimi (`best_ckpt`) ve kabul kapısı val setinde yapıldı; aynı sette
+rapor vermek iyimser bir sayı üretir. `--report-only` kabul kapısına
+dokunmaz, bu yüzden 5. adımdaki export geçerli kalır:
+
+```bash
+python quantize_yolox.py --quant-mode test --report-only     --ann instances_test.json $ARGS
+```
+
+Çıktı: AP@[.50:.95] / AP@0.50 / AP@0.75, kart eşiğinde (conf=0.15) P/R/F1,
+en iyi F1 ve onun eşiği, ayrıca **kaynak bazlı AP tablosu**. Termal
+dayanıklılığı `ir_thermal` satırından okuyun: tek global sayı, o kaynağın
+çökmesini gizleyebilir.
+
 ## 9. KV260 için derleme
 
 ```bash
-bash compile_kv260.sh            # 4. arguman: sinif sayisi, varsayilan 2
+bash compile_kv260.sh            # 4. arguman: sinif sayisi, varsayilan 1 (ship)
 ```
 
-Script, `build/compiled/yolox_nano_visdrone.xmodel` üretir ve subgraph dağılımını
+Script, `build/compiled/yolox_tiny_ship.xmodel` üretir ve subgraph dağılımını
 yazdırır. Graph'ın tamamı **tam olarak bir DPU subgraph** olmalıdır; ek CPU/USER
 subgraph varsa script başarısız olur. Ayrıca 1 giriş ve üç YOLOX çıkışı
-doğrulanır; çıkış kanal sayısı `5 + sınıf sayısı` olmalıdır (2 sınıf → **7**).
-Farklı bir şema kullanıyorsanız: `bash compile_kv260.sh build/quant build/compiled yolox_nano_visdrone 10`.
+doğrulanır; çıkış kanal sayısı `5 + sınıf sayısı` olmalıdır (1 sınıf → **6**).
+Farklı bir şema kullanıyorsanız: `bash compile_kv260.sh build/quant build/compiled baska_ad 10`.
 
-> Girdi **kare değildir** (896×512). Derleme öncesi
-> `python quantize_yolox.py --inspect $ARGS` ile tüm katmanların DPU'ya
-> atandığını doğrulayın; kare olmayan girdide bu kontrol daha da önemlidir.
+> Girdi **512×512 karedir** (aerial projedeki 896×512'den farklı). Derleme
+> öncesi `python quantize_yolox.py --inspect $ARGS` ile tüm katmanların
+> DPU'ya atandığını doğrulayın.
 
 ## 10. Sorun giderme
 
@@ -205,14 +229,18 @@ Farklı bir şema kullanıyorsanız: `bash compile_kv260.sh build/quant build/co
   200'e düşürmek kabul edilebilir. **INT8 AP testinde `--subset-len`
   kullanılamaz**: accuracy gate tam val setiyle üretilmek zorundadır, script
   alt küme verilirse durur.
+- **`ModuleNotFoundError: ship_metrics`** → `ship_metrics.py` artifacts
+  paketinden `/workspace/yolox_ship/` altına kopyalanmamış. Ölçüm adımları
+  (float / test / report-only) bu dosya olmadan çalışmaz.
 - **`kalibrasyon goruntusu bulunamadi`** → `images/` ağacını düzleştirmişsiniz
   veya yanlış `--data-dir` vermişsiniz. Beklenen düzen 4. adımda.
 
 ## Çıktılar (bir sonraki aşamaya taşınacaklar)
 
-- `build/compiled/yolox_nano_visdrone.xmodel` → KV260'a kopyalanacak
+- `build/compiled/yolox_tiny_ship.xmodel` → KV260'a kopyalanacak
 - `build/quant/accuracy_gate.json` → kullanılan INT8 artifactların AP kabul kaydı
-- Float ve INT8 AP@500 değerleri → rapor için not edin
+- Float / INT8 AP ve kart eşiğindeki P/R/F1 → rapor için not edin
+- 6. adımın test seti çıktısı → **raporlanacak nihai sayı**
 - Karttaki decode/NMS/merkez eşdeğerliği → `deploy/README.md` içindeki golden
   test ile ayrıca doğrulanır
 

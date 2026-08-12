@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
-"""Sync Kaggle notebook %%writefile cells from canonical project sources."""
+"""Sync Kaggle gemi not defterinin %%writefile hucrelerini kaynak dosyalardan.
+
+tools/_sync_notebook_embeds.py (aerial) ile ayni desen, farkli hedef.
+"""
 
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NB_PATH = ROOT / "training" / "kaggle_visdrone_yolox.ipynb"
+NB_PATH = ROOT / "training" / "kaggle_ship_yolox.ipynb"
 
 EMBEDS = {
-    3: ROOT / "tools" / "build_dataset.py",
-    4: ROOT / "training" / "visdrone_eval.py",
-    5: ROOT / "training" / "exps" / "yolox_nano_visdrone.py",
-    6: ROOT / "training" / "exps" / "yolox_tiny_visdrone.py",
+    3: ROOT / "tools" / "dataset_common.py",
+    4: ROOT / "tools" / "build_ship_dataset.py",
+    5: ROOT / "training" / "exps" / "yolox_tiny_ship.py",
+    6: ROOT / "training" / "ship_metrics.py",
 }
 
 
 def with_notebook_note(path: Path, body: str) -> str:
-    if path.name not in {"build_dataset.py", "yolox_nano_visdrone.py",
-                         "yolox_tiny_visdrone.py"}:
+    if not body.startswith('"""') and not body.startswith("#!"):
         return body
-    if not body.startswith('"""'):
+    marker = '"""'
+    start = body.find(marker)
+    if start != 0:
         return body
-    end = body.find('"""', 3)
+    end = body.find(marker, 3)
     if end < 0:
         return body
     end += 3

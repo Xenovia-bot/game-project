@@ -42,9 +42,12 @@ Bilgisayardan (veya VM'den):
 
 ```bash
 scp -r deploy root@<KART_IP>:~/yolox_visdrone
-scp build/compiled/yolox_nano_visdrone.xmodel root@<KART_IP>:~/yolox_visdrone/
-scp test_video.mp4 root@<KART_IP>:~/yolox_visdrone/
+scp build/compiled_tiny/yolox_tiny_visdrone.xmodel root@<KART_IP>:~/yolox_visdrone/
+scp test_video.avi root@<KART_IP>:~/yolox_visdrone/
 ```
+
+> **Aktif model YOLOX-Tiny.** Nano kapandı (INT8'e kuantalanamıyor); yollarda
+> `quant_tiny` / `compiled_tiny` / `yolox_tiny_visdrone` kullanılır.
 
 Test videosu notu: elinizde drone videosu yoksa val görüntülerinden hızlıca bir
 video üretebilirsiniz (bilgisayarda, ffmpeg ile). Kaynağı tek bir alandan seçin

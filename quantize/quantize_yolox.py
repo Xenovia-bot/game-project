@@ -1,31 +1,49 @@
 #!/usr/bin/env python3
-"""Havadan arac YOLOX-Nano'su icin Vitis AI PTQ kuantalama ve xmodel export.
+"""Gemi tespiti YOLOX-Tiny'si icin Vitis AI PTQ kuantalama ve xmodel export.
 
 Vitis AI 3.0 pytorch docker'i icinde calistirilir (conda env: vitis-ai-pytorch).
 
-Beklenen veri duzeni (`tools/build_dataset.py --images-out` ciktisi):
+Olculen metrik: standart COCO mAP (AP@[.50:.95], AP@0.50, AP@0.75) + kartin
+calisma noktasinda (exp.deploy_conf, varsayilan 0.15) precision/recall/F1.
+AP tanimi Kaggle'daki egitim degerlendirmesiyle BIREBIR ayni tanimdir --
+float/INT8/Kaggle sayilari ancak boyle kiyaslanabilir.
+
+/workspace altinda bulunmasi gerekenler (Kaggle artifacts zip'inden):
+    quantize_yolox.py
+    ship_metrics.py          <- metrik modulu; yoksa olcum adimlari calismaz
+    yolox_tiny_ship.py
+    best_ckpt.pth + YOLOX_COMMIT.txt
+
+Beklenen veri duzeni (`tools/build_ship_dataset.py --images-out` ciktisi):
 
     <data-dir>/annotations/instances_val.json
+    <data-dir>/annotations/instances_test.json    # nihai rapor icin
     <data-dir>/annotations/instances_train.json   # istege bagli, kalibrasyon icin
     <data-dir>/images/<kaynak>/<ad>.jpg           # COCO file_name ile birebir
 
 Ornek akis (docker icinde, /workspace altinda):
-  ARGS="--exp-file yolox_nano_visdrone.py --ckpt best_ckpt.pth --data-dir datasets/merged"
+  ARGS="--exp-file yolox_tiny_ship.py --ckpt best_ckpt.pth --data-dir datasets/ship_merged"
 
   # 0) (istege bagli) DPU uyumluluk raporu
   python quantize_yolox.py --inspect $ARGS
 
-  # 1) float AP@500 dogrulama (Kaggle'daki degerle karsilastirin)
+  # 1) float dogrulama (Kaggle'daki AP ile ayni cikmali)
   python quantize_yolox.py --quant-mode float $ARGS
 
-  # 2) kalibrasyon (PTQ)
+  # 2) kalibrasyon (PTQ) -- yalnizca train goruntuleri kullanilir
   python quantize_yolox.py --quant-mode calib --subset-len 300 $ARGS
 
-  # 3) INT8 AP@500 olcumu (tam val seti; accuracy gate burada uretilir)
-  python quantize_yolox.py --quant-mode test --float-map <FLOAT_AP500> $ARGS
+  # 3) INT8 olcumu (tam val seti; accuracy gate burada uretilir)
+  python quantize_yolox.py --quant-mode test --float-map <FLOAT_AP> $ARGS
 
   # 4) xmodel export (derleme girdisi)
   python quantize_yolox.py --quant-mode test --deploy --subset-len 1 --batch-size 1 $ARGS
+
+  # 5) RAPORLANACAK nihai sayi -- test setinde, YALNIZCA BIR KEZ.
+  #    Model secimi ve kabul kapisi val'de yapildi; ayni sette raporlamak
+  #    iyimser bir sayi verir.
+  python quantize_yolox.py --quant-mode test --report-only \
+      --ann instances_test.json $ARGS
 """
 
 import argparse
@@ -150,7 +168,7 @@ def load_checkpoint_strict(model, path):
 
 
 def load_exp(exp_file):
-    spec = importlib.util.spec_from_file_location("visdrone_exp", exp_file)
+    spec = importlib.util.spec_from_file_location("ship_exp", exp_file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.Exp()
@@ -309,10 +327,16 @@ def select_subset(img_ids, subset_len):
 
 
 def evaluate(run_model, ann_file, img_dir, input_size, conf_thr, nms_thr,
-             num_classes, subset_len=None, tag=""):
-    """Resmi VisDrone DET tarzi AP@500; fast_finetune metrigi."""
+             num_classes, subset_len=None, tag="", score_thr=None,
+             report=True):
+    """Standart COCO mAP + kart esiginde P/R/F1; fast_finetune metrigi.
+
+    AP tanimi Kaggle'daki egitim degerlendirmesiyle (YOLOX COCOEvaluator)
+    BIREBIR ayni; float ve INT8 sayilarinin kiyaslanabilmesi buna bagli.
+    """
     from pycocotools.coco import COCO
-    from visdrone_eval import evaluate_visdrone
+
+    from ship_metrics import evaluate_ship, format_metrics
 
     coco_gt = COCO(str(ann_file))
     img_ids = select_subset(sorted(coco_gt.getImgIds()), subset_len)
@@ -339,8 +363,13 @@ def evaluate(run_model, ann_file, img_dir, input_size, conf_thr, nms_thr,
         if n % 50 == 0:
             print("  [%s] %d/%d goruntu, %.0f sn" % (tag, n, len(img_ids), time.time() - t0))
 
+    if not report:
+        # --deploy yolunda bu cagri yalnizca export oncesi zorunlu forward
+        # gecisidir (tek goruntu). AP'si anlamsiz; basilirsa hata sanilir.
+        print("[%s] export oncesi forward gecisi tamam (AP hesaplanmadi)" % tag)
+        return 0.0
     if not results:
-        print("UYARI: hic tespit uretilmedi (AP@500=0)")
+        print("UYARI: hic tespit uretilmedi (AP=0)")
         return 0.0
     if subset_len:
         # Yardimci tum coco image id'lerini gezer; alt-kume testinde GT'yi de daralt.
@@ -352,11 +381,12 @@ def evaluate(run_model, ann_file, img_dir, input_size, conf_thr, nms_thr,
             if annotation["image_id"] in img_ids
         ]
         coco_gt.createIndex()
-    metrics = evaluate_visdrone(coco_gt, results, max_dets=500)
-    print(
-        "[%s] VisDrone AP@500=%.4f  AP50@500=%.4f  AP75@500=%.4f"
-        % (tag, metrics["ap"], metrics["ap50"], metrics["ap75"])
-    )
+    kwargs = {} if score_thr is None else {"deploy_conf": score_thr}
+    metrics = evaluate_ship(coco_gt, results, **kwargs)
+    # Kaynak bazli tablo da basilir: tek global AP bu veri setinde yaniltici
+    # olabiliyor (kaynaklar cok farkli), ozellikle termalin cokup cokmedigi
+    # INT8'den sonra gorulmeli.
+    print(format_metrics(metrics, "[%s] COCO" % tag))
     return metrics["ap"]
 
 
@@ -420,11 +450,16 @@ def calibrate(run_model, paths, input_size, subset_len, batch_size):
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--exp-file", required=True, help="yolox_nano_visdrone.py yolu")
+    p.add_argument("--exp-file", required=True, help="yolox_tiny_ship.py yolu")
     p.add_argument("--ckpt", required=True, help="best_ckpt.pth yolu")
     p.add_argument("--data-dir", required=True,
                    help="birlestirilmis veri seti koku: <yol>/annotations ve "
                         "<yol>/images alt klasorlerini icerir")
+    p.add_argument("--ann", default="instances_val.json",
+                   help="olcum yapilacak anotasyon dosyasi (<data-dir>/"
+                        "annotations altinda). Kaggle ile kiyaslama ve INT8 "
+                        "kayip kapisi icin val; RAPORLANACAK NIHAI sayi icin "
+                        "bir kez instances_test.json")
     p.add_argument("--output", default="build/quant", help="cikti klasoru")
     p.add_argument("--quant-mode", default="calib", choices=["float", "calib", "test"])
     p.add_argument("--subset-len", type=int, default=None,
@@ -446,8 +481,13 @@ def parse_args():
                         "basina maliyet bununla dogru orantili: 100 goruntu "
                         "CPU'da ~8 saat, 32 goruntu ~2,5 saat. Az ornek "
                         "AdaQuant'i bir miktar zayiflatir (varsayilan 100)")
+    p.add_argument("--report-only", action="store_true",
+                   help="yalnizca olc ve yazdir: --float-map istemez, accuracy "
+                        "gate YAZMAZ. Nihai sayiyi test setinde raporlamak "
+                        "icin (--ann instances_test.json). Kabul kapisi val'de "
+                        "uretilir ve oyle kalmalidir.")
     p.add_argument("--float-map", type=float, default=None,
-                   help="Kaggle/float AP@500; INT8 kayip sinirini denetler")
+                   help="Kaggle/float AP@[.50:.95]; INT8 kayip sinirini denetler")
     p.add_argument("--max-map-drop", type=float, default=0.02,
                    help="izin verilen mutlak AP kaybi (varsayilan: 0.02)")
     p.add_argument("--inspect", action="store_true", help="DPU uyumluluk raporu uret")
@@ -485,10 +525,10 @@ def main():
     #   <data-dir>/annotations/instances_val.json
     #   <data-dir>/images/<kaynak>/<ad>.jpg      <- COCO file_name ile birebir
     data_dir = Path(args.data_dir)
-    ann_val = data_dir / "annotations" / "instances_val.json"
+    ann_val = data_dir / "annotations" / args.ann
     val_dir = data_dir / "images"
     if not ann_val.is_file():
-        raise SystemExit("HATA: val anotasyonu yok: %s" % ann_val)
+        raise SystemExit("HATA: anotasyon dosyasi yok: %s" % ann_val)
     if not val_dir.is_dir():
         raise SystemExit(
             "HATA: goruntu klasoru yok: %s\n"
@@ -531,7 +571,8 @@ def main():
 
     if args.quant_mode == "float":
         evaluate(deploy_model, ann_val, val_dir, input_size, args.conf, args.nms,
-                 exp.num_classes, args.subset_len, tag="float")
+                 exp.num_classes, args.subset_len, tag="float",
+                 score_thr=exp.deploy_conf)
         return
 
     from pytorch_nndct.apis import torch_quantizer
@@ -568,13 +609,21 @@ def main():
                 raise SystemExit("--deploy icin --batch-size 1 --subset-len 1 kullanin")
             # export oncesi bir forward gecisi zorunlu
             evaluate(qmodel, ann_val, val_dir, input_size, args.conf, args.nms,
-                     exp.num_classes, subset_len=1, tag="deploy")
+                     exp.num_classes, subset_len=1, tag="deploy", report=False)
             quantizer.export_xmodel(str(out_dir), deploy_check=True)
             print("Kuantalanmis xmodel yazildi:", out_dir)
+        elif args.report_only:
+            # Nihai rapor: kapi dosyasina DOKUNMAZ. Aksi halde test setiyle
+            # yazilan bir kapi, --deploy adiminda val kimligiyle eslesmez ve
+            # export'u bloklardi.
+            evaluate(qmodel, ann_val, val_dir, input_size, args.conf, args.nms,
+                     exp.num_classes, args.subset_len, tag="rapor",
+                     score_thr=exp.deploy_conf)
         else:
             if args.float_map is None:
                 raise SystemExit(
-                    "HATA: tam INT8 kabul testi icin --float-map zorunludur."
+                    "HATA: tam INT8 kabul testi icin --float-map zorunludur. "
+                    "Yalnizca olcum istiyorsaniz --report-only kullanin."
                 )
             if args.subset_len is not None:
                 raise SystemExit(
@@ -583,7 +632,8 @@ def main():
                 )
             int8_map = evaluate(
                 qmodel, ann_val, val_dir, input_size, args.conf, args.nms,
-                exp.num_classes, args.subset_len, tag="int8"
+                exp.num_classes, args.subset_len, tag="int8",
+                score_thr=exp.deploy_conf
             )
             if args.float_map is not None:
                 drop = args.float_map - int8_map
@@ -598,8 +648,8 @@ def main():
                     args, ann_val, input_size, quant_info
                 )
                 gate.update({
-                    "float_ap500": args.float_map,
-                    "int8_ap500": int8_map,
+                    "float_ap": args.float_map,
+                    "int8_ap": int8_map,
                     "max_ap_drop": args.max_map_drop,
                 })
                 gate_file.write_text(json.dumps(gate, indent=2) + "\n")

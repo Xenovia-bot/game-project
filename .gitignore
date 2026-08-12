@@ -8,6 +8,7 @@ __pycache__/
 # takipte kalmali (HANDOFF: notebook elle duzenlenmez).
 build/*
 !build/make_notebook.py
+!build/make_ship_notebook.py
 *.o
 *.exe
 yolox_visdrone_demo
@@ -29,3 +30,6 @@ golden/
 *.avi
 *.mp4
 centers.csv
+centers_*.csv
+out/
+test_video/

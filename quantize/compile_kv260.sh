@@ -10,8 +10,8 @@ set -euo pipefail
 
 QUANT_DIR=${1:-build/quant}
 OUT_DIR=${2:-build/compiled}
-NAME=${3:-yolox_nano_visdrone}
-NUM_CLASSES=${4:-2}
+NAME=${3:-yolox_tiny_ship}
+NUM_CLASSES=${4:-1}   # gemi projesi tek sinif: cls kanali 1, cikti 5+1=6
 ARCH=/opt/vitis_ai/compiler/arch/DPUCZDX8G/KV260/arch.json
 
 if [ ! -f "${ARCH}" ]; then
@@ -43,17 +43,43 @@ graph = xir.Graph.deserialize(sys.argv[1])
 subs = graph.get_root_subgraph().toposort_child_subgraph()
 dpu = [s for s in subs if s.has_attr("device") and s.get_attr("device") == "DPU"]
 non_dpu = [s for s in subs if not (s.has_attr("device") and s.get_attr("device") == "DPU")]
+def op_types(sub):
+    """Subgraph'taki op turleri; xir surumleri arasinda API oynayabiliyor."""
+    try:
+        return ",".join(sorted({op.get_type() for op in sub.get_ops()}))
+    except Exception:                                  # pragma: no cover
+        return "?"
+
+
 for s in subs:
     dev = s.get_attr("device") if s.has_attr("device") else "?"
-    print("  - %-5s %s" % (dev, s.get_name()))
+    print("  - %-5s %-70s [%s]" % (dev, s.get_name(), op_types(s)))
 print("Toplam subgraph: %d, DPU subgraph: %d" % (len(subs), len(dpu)))
-if len(subs) != 1 or len(dpu) != 1 or non_dpu:
-    print("HATA: derlenmis graph yalnizca bir DPU subgraph'tan olusmuyor!")
+
+# Kapi **DPU subgraph sayisina** bakar, toplama degil.
+#
+# Onceki hali `len(subs) != 1` istiyordu ve ilk gercek derlemede patladi
+# (2026-08-10): 1 USER (girdi) + 1 DPU + 9 CPU `*_fix_` = 11 subgraph.
+# O 9 CPU blogu, 9 ayri cikti tensorune gecmenin dogrudan sonucu; her birinin
+# sabit noktali -> float donusumu ayri bir subgraph olarak gorunuyor.
+# `main.cpp` bu olceklemeyi zaten host tarafinda kendisi yapiyor, o bloklar
+# calisma zamaninda kullanilmiyor.
+#
+# Kapinin asil amaci **agin ortasinda** CPU'ya dusen op yakalamakti; DPU<->CPU
+# gidis gelisi FPS'i oldurur. Tek bir DPU subgraph varken bu yapisal olarak
+# imkansiz: her CPU blogu zorunlu olarak ya oncesinde ya sonrasindadir.
+# Yani `len(dpu) == 1` tek basina yeterli ve dogru kontroldur.
+if len(dpu) != 1:
+    print("HATA: tam olarak bir DPU subgraph bekleniyordu, bulunan %d!" % len(dpu))
     print("Cozum: quantize_yolox.py --inspect ciktisindaki CPU'ya dusen op'lari inceleyin.")
     sys.exit(1)
 
-inputs = dpu[0].get_input_tensors()
-outputs = dpu[0].get_output_tensors()
+# list(): bu xir surumunde get_*_tensors() **set** donduruyor. Set'te ne `+`
+# ne de indeksleme var; ikisi de asagida kullaniliyor (2026-08-10'da ilk
+# gercek derlemede ortaya cikti). Siralamaya guvenmiyoruz: seviye/rol
+# esleme dims'ten turetiliyor, tipki main.cpp'deki gibi.
+inputs = list(dpu[0].get_input_tensors())
+outputs = list(dpu[0].get_output_tensors())
 # 9 cikti = 3 stride seviyesi x (reg 4, obj 1, cls num_classes).
 # Bas ciktilari bilerek BIRLESTIRILMEZ: Vitis AI'da concat tum girdilerin ayni
 # fix_point'i paylasmasini zorunlu kilar; obj logitleri -76'ya inerken reg

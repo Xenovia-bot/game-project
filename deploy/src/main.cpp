@@ -151,7 +151,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Kullanim: " << argv[0]
               << " <model.xmodel> <video> [cikti.avi] [centers.csv]"
                  " [--conf 0.15] [--nms 0.45] [--max-frames N]"
-                 " [--dump-first-frame DIR] [--no-track]"
+                 " [--dump-first-frame DIR] [--no-track] [--no-video]"
                  " [--track-n-init 3] [--track-max-age 30]\n";
     return 1;
   }
@@ -166,6 +166,7 @@ int main(int argc, char* argv[]) {
   long max_frames = -1;
   std::string dump_dir;
   bool use_tracker = true;
+  bool draw_output = true;
   tracking::Config track_cfg;
   int positional = 0;
   try {
@@ -181,6 +182,11 @@ int main(int argc, char* argv[]) {
         dump_dir = argv[++i];
       } else if (a == "--no-track") {
         use_tracker = false;
+      } else if (a == "--no-video") {
+        // Urunun ciktisi centers.csv; aciklamali video yalnizca gorsel
+        // kontrol icin. Yogun sahnede 300+ kutunun cizimi son-islemenin
+        // buyuk kismini yiyor, dagitimda bu maliyet gereksiz.
+        draw_output = false;
       } else if (a == "--track-n-init" && i + 1 < argc) {
         track_cfg.n_init = std::stoi(argv[++i]);
       } else if (a == "--track-max-age" && i + 1 < argc) {
@@ -221,13 +227,27 @@ int main(int argc, char* argv[]) {
   // ---------------- DPU runner ----------------
   auto graph = xir::Graph::deserialize(model_path);
   auto children = graph->get_root_subgraph()->children_topological_sort();
-  if (children.size() != 1 || !children[0]->has_attr("device") ||
-      children[0]->get_attr<std::string>("device") != "DPU") {
-    std::cerr << "HATA: xmodel yalnizca bir DPU subgraph icermeli; bulunan "
-              << children.size() << " alt graph\n";
+  // **DPU subgraph sayisina** bakilir, toplama degil. Derlenmis graph'ta
+  // 1 USER (girdi) + 1 DPU + cikti basina bir `fix2float` CPU blogu bulunur;
+  // 9 ayri cikti tensoruyle bu 11 alt graph eder (2026-08-10'da kartta
+  // olculdu). O CPU bloklari terminal dequant islemidir ve burada
+  // kullanilmaz: asagida her cikti kendi `fix_point`'iyle host tarafinda
+  // olceklenir. Tek DPU blogu varken agin ortasinda CPU'ya dusme yapisal
+  // olarak imkansizdir, dolayisiyla dogru kapi budur.
+  std::vector<xir::Subgraph*> dpu_subgraphs;
+  for (auto* child : children) {
+    if (child->has_attr("device") &&
+        child->get_attr<std::string>("device") == "DPU") {
+      dpu_subgraphs.push_back(child);
+    }
+  }
+  if (dpu_subgraphs.size() != 1) {
+    std::cerr << "HATA: xmodel tam olarak bir DPU subgraph icermeli; bulunan "
+              << dpu_subgraphs.size() << " (toplam " << children.size()
+              << " alt graph)\n";
     return 1;
   }
-  xir::Subgraph* dpu_subgraph = children[0];
+  xir::Subgraph* dpu_subgraph = dpu_subgraphs[0];
   auto attrs = xir::Attrs::create();
   auto runner = vart::RunnerExt::create_runner(dpu_subgraph, attrs.get());
   auto input_tbs = runner->get_inputs();
@@ -374,10 +394,12 @@ int main(int argc, char* argv[]) {
   const int frame_w = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
   const int frame_h = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
 
-  cv::VideoWriter writer(out_video_path,
-                         cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps_in,
-                         cv::Size(frame_w, frame_h));
-  if (!writer.isOpened()) {
+  cv::VideoWriter writer;
+  if (draw_output) {
+    writer.open(out_video_path, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
+                fps_in, cv::Size(frame_w, frame_h));
+  }
+  if (draw_output && !writer.isOpened()) {
     std::cerr << "UYARI: cikti videosu acilamadi (" << out_video_path
               << "); yalnizca CSV yazilacak\n";
   }
@@ -396,6 +418,11 @@ int main(int argc, char* argv[]) {
   long frame_id = 0;
   long total_dets = 0;
   double sum_pre = 0.0, sum_dpu = 0.0, sum_post = 0.0;
+  // Son-isleme dort ayri isi kapsiyor ve yogun sahnede hangisinin pahali
+  // oldugu tahminle bilinemez: 2026-08-10'da seyrek sahnede 0,2 ms olan
+  // son-isleme, ~370 araclik bir otoparkta 76 ms'ye cikti. Alt kirilim
+  // olmadan optimizasyon korlemesine olur.
+  double sum_decode = 0.0, sum_nms = 0.0, sum_track = 0.0, sum_draw = 0.0;
   const auto t_start = std::chrono::steady_clock::now();
 
   while (cap.read(frame)) {
@@ -581,7 +608,10 @@ int main(int argc, char* argv[]) {
         }
       }
     }
+    sum_decode += ms_since(t_post);
+    const auto t_nms = std::chrono::steady_clock::now();
     std::vector<Detection> dets = nms_per_class(cands, nms_thr);
+    sum_nms += ms_since(t_nms);
     std::ofstream golden_csv;
     if (frame_id == 0 && !dump_dir.empty()) {
       golden_csv.open(std::filesystem::path(dump_dir) / "cpp_detections.csv");
@@ -626,6 +656,7 @@ int main(int argc, char* argv[]) {
       int track_id;
     };
     std::vector<Rendered> rendered;
+    const auto t_track = std::chrono::steady_clock::now();
     if (use_tracker) {
       for (const tracking::Track& t : tracker.update(observations)) {
         if (t.visible()) rendered.push_back({t.box, t.score, t.cls, t.id});
@@ -635,7 +666,9 @@ int main(int argc, char* argv[]) {
         rendered.push_back({o.box, o.score, o.cls, -1});
       }
     }
+    sum_track += ms_since(t_track);
 
+    const auto t_draw = std::chrono::steady_clock::now();
     for (const Rendered& item : rendered) {
       // ---- MERKEZ NOKTASI ----
       const float cx = item.box.cx();
@@ -646,6 +679,7 @@ int main(int argc, char* argv[]) {
       csv << frame_id << "," << item.track_id << "," << item.cls << ","
           << cname << "," << item.score << "," << cx << "," << cy << "\n";
 
+      if (!draw_output) continue;
       cv::rectangle(
           frame,
           cv::Point(static_cast<int>(item.box.x1), static_cast<int>(item.box.y1)),
@@ -667,6 +701,7 @@ int main(int argc, char* argv[]) {
                             std::max(12, static_cast<int>(item.box.y1) - 4)),
                   cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 255, 255), 1);
     }
+    sum_draw += ms_since(t_draw);
     total_dets += valid_frame_dets;
     sum_post += ms_since(t_post);
 
@@ -693,6 +728,13 @@ int main(int argc, char* argv[]) {
   std::cout << "ort. on-isleme   : " << sum_pre / frame_id << " ms\n";
   std::cout << "ort. DPU         : " << sum_dpu / frame_id << " ms\n";
   std::cout << "ort. son-isleme  : " << sum_post / frame_id << " ms\n";
+  std::cout << std::setprecision(2);
+  std::cout << "     decode      : " << sum_decode / frame_id << " ms\n";
+  std::cout << "     NMS         : " << sum_nms / frame_id << " ms\n";
+  std::cout << "     takip       : " << sum_track / frame_id << " ms\n";
+  std::cout << "     cizim       : " << sum_draw / frame_id << " ms"
+            << (draw_output ? "\n" : "  (--no-video ile kapali)\n");
+  std::cout << std::setprecision(1);
   std::cout << "uctan uca FPS    : " << frame_id / total_s << "\n";
   std::cout << "cikti video      : " << (writer.isOpened() ? out_video_path : "(yok)")
             << "\n";

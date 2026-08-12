@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Kaggle'a yuklenecek klasoru hazirlar.
+"""Gemi veri seti icin Kaggle'a yuklenecek klasoru hazirlar.
 
-Egitim icin gereken 5 zip'i tek klasore kopyalar ve Kaggle CLI'nin bekledigi
-dataset-metadata.json dosyasini yazar. Kullanilmayan VisDrone test bolumleri
-bilerek disarida birakilir.
+build_ship_dataset.py Kaggle'da CALISTIRILACAK (yerelde birlestirilip
+yuklenmeyecek): birlestirilmis set ~GB'larca yer tutar, ham zip'ler ise Kaggle
+deposunda zaten durur. Bu yuzden burada yalnizca 6 HAM kaynak zip'i kopyalanir;
+birlestirmeyi not defterinin kesif hucresi kendisi yapar -- kaynaklari klasor
+adindan degil kategori imzasindan bulup `--source` argumanlarini kendi uretir,
+yani asagida basilan komutu elle yazmaniz gerekmez.
 
 Kullanim:
-    python tools/prepare_kaggle_upload.py
-    python tools/prepare_kaggle_upload.py --user BASKA_KULLANICI --out D:/upload
+    python tools/prepare_ship_kaggle_upload.py
+    python tools/prepare_ship_kaggle_upload.py --user BASKA_KULLANICI --out D:/upload
 """
 
 import argparse
@@ -17,30 +20,25 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: build_dataset.py'nin kullandigi kaynaklar. Test bolumleri kullanilmiyor.
 NEEDED = [
-    "VisDrone2019-DET-train.zip",
-    "VisDrone2019-DET-val.zip",
-    "VESSELimg.v4i.coco.zip",
-    "Military Vehicle Recognition.v7i.coco.zip",
-    "A Multi-Class UAV Military Object Detection Datase.zip",
+    "VAIS_RGB-SMD-MARITIME-WSODD-MARVEL.v5-rgb_40_grayscale_60.coco.zip",
+    "Singapore maritime.v5i.coco.zip",
+    "Sea Vessels Dataset.v2-sea_vessels_v2.coco.zip",
+    "ship model.v4i.coco.zip",
+    "ir.v1i.coco.zip",
+    "WUTDet Part A.zip",
 ]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", default=str(ROOT / "datasets"))
-    parser.add_argument("--out", default=str(Path.home() / "kaggle_upload"))
-    parser.add_argument("--user", default="burakzorgeen",
-                        help="Kaggle kullanici adi (dataset id icin). "
-                             "Profil adresindeki kaggle.com/<ad> ile birebir "
-                             "ayni olmali, yoksa 'datasets create' reddeder.")
-    parser.add_argument("--slug", default="aerial-vehicle-sources")
+    parser.add_argument("--data-dir", default=str(Path.home() / "OneDrive" / "Masaüstü" / "datasets"))
+    parser.add_argument("--out", default=str(Path.home() / "kaggle_upload_ship"))
+    parser.add_argument("--user", default="burakzorgeen")
+    parser.add_argument("--slug", default="ship-detection-sources")
     args = parser.parse_args()
 
     data_dir, out = Path(args.data_dir), Path(args.out)
-    # Zip'ler duz `datasets/` altinda da, kaynak bazli alt klasorlerde de
-    # (datasets/aerial-land/, datasets/milrec/, ...) durabilir; ozyinelemeli ara.
     located = {}
     for name in NEEDED:
         matches = sorted(data_dir.rglob(name))
@@ -74,6 +72,10 @@ def main():
     print(f"\nHazir: {out}  (toplam {total/1e9:.2f} GB)")
     print("\nSimdi calistirin:")
     print(f'    kaggle datasets create -p "{out}"')
+    print("\nSonra Kaggle notebook'unda (training/kaggle_ship_yolox.ipynb) "
+          "'Add Input' ile bu veri setini baglayin.")
+    print("Birlestirme komutunu elle yazmayin: kesif hucresi 6 kaynagi kategori "
+          "imzasindan bulup build_ship_dataset.py'yi kendisi calistirir.")
 
 
 if __name__ == "__main__":

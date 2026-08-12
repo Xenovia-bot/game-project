@@ -1,0 +1,11 @@
+# Karta/VM'e giden kabuk betikleri LF olmali.
+#
+# 2026-08-10'da olculdu: `pscp` ile Windows'tan karta gonderilen `build.sh`
+# CRLF tasidigi icin kartta `: invalid option name: pipefail` hatasi verdi.
+# Bash `pipefail\r` diye bir secenek gormeye calisiyor. C++ kaynaklari
+# etkilenmiyor (derleyici CRLF okur), kirilan yalnizca kabuk betikleri.
+*.sh text eol=lf
+
+# Kartta ve docker'da calisan Python de LF olsun; heredoc'a gomulen
+# betiklerde ayni sorun cikar.
+*.py text eol=lf
