@@ -93,6 +93,15 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+#: --deploy'un KENDISI urettigi yan dosyalar/klasorler. Bunlar checksum'a
+#: dahil edilirse, bir --deploy denemesi bir sonrakinin checksum'ini bozar
+#: (olculdu 2026-08-13: DeployModel.py + deploy_check_data_int/ + __pycache__
+#: INT8 testinden SONRAKI bir --deploy denemesinde olustu, sonraki --deploy
+#: cagrisi "quant_artifacts_sha256 eslesmiyor" ile durdu -- calisan bir
+#: checkpoint'i INT8 testini tekrarlamaya zorlayan bir kisir donguydu).
+DEPLOY_BYPRODUCT_NAMES = {"DeployModel.py", "deploy_check_data_int", "__pycache__"}
+
+
 def sha256_quant_artifacts(root):
     digest = hashlib.sha256()
     files = sorted(
@@ -100,6 +109,7 @@ def sha256_quant_artifacts(root):
         if path.is_file()
         and path.name != "accuracy_gate.json"
         and path.suffix not in {".xmodel", ".onnx"}
+        and not DEPLOY_BYPRODUCT_NAMES & set(path.relative_to(root).parts)
     )
     for path in files:
         digest.update(str(path.relative_to(root)).encode("utf-8"))
