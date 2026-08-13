@@ -98,13 +98,29 @@ if len(input_dims) != 4 or input_dims[0] != 1 or input_dims[-1] != 3:
     sys.exit(1)
 
 NUM_CLASSES = int(sys.argv[2])
-# Rolu kanal sayisindan taniyoruz; ucu de farkli olmali.
-if len({4, 1, NUM_CLASSES}) != 3:
-    print("HATA: sinif sayisi %d, roller kanal sayisindan ayirt edilemez "
-          "(4=reg, 1=obj, nc=cls cakisiyor)" % NUM_CLASSES)
-    sys.exit(1)
 
-# Uzamsal boyuta gore seviyelere grupla, rolu kanal sayisindan tani.
+# Rolu KANAL SAYISINDAN degil tensor ADINDAN taniyoruz. YOLOXHead PyTorch'ta
+# ayri ModuleList'ler kullaniyor (reg_preds/obj_preds/cls_preds), bu isimler
+# xir tensorlerine degismeden geciyor -- gercek derlemede dogrulandi
+# (2026-08-13): "..._reg_preds__ModuleList_2__16918_fix" gibi. Kanal sayisina
+# bakan onceki surum NUM_CLASSES == 1 veya 4 oldugunda (tek sinif, ya da
+# yanlislikla 4 sinif) roller birbirinden ayirt edilemedigi icin HER ZAMAN
+# hata veriyordu; gemi projesi tam olarak NUM_CLASSES=1 oldugu icin bu
+# noktada durmustu. Isim tabanli esleme sinif sayisindan bagimsizdir.
+def _role_from_name(name):
+    if "reg_preds" in name:
+        return "reg"
+    if "obj_preds" in name:
+        return "obj"
+    if "cls_preds" in name:
+        return "cls"
+    return None
+
+
+_EXPECTED_CHANNELS = {"reg": 4, "obj": 1, "cls": NUM_CLASSES}
+
+# Uzamsal boyuta gore seviyelere grupla, rolu isimden tani, kanal sayisini
+# sadece SAGLAMA olarak dogrula (yanlis exp/checkpoint sessizce gecmesin).
 levels = {}
 for tensor in outputs:
     dims = list(tensor.dims)
@@ -114,10 +130,15 @@ for tensor in outputs:
         print("HATA: cikti tensoru NHWC ve girdiyle uyumlu olmali: %s" % dims)
         sys.exit(1)
     key = (dims[1], dims[2])
-    role = {4: "reg", 1: "obj", NUM_CLASSES: "cls"}.get(dims[-1])
+    role = _role_from_name(tensor.name)
     if role is None:
-        print("HATA: taninmayan cikti kanal sayisi %d (beklenen 4/1/%d): %s"
-              % (dims[-1], NUM_CLASSES, dims))
+        print("HATA: tensor adindan rol cikarilamadi (reg_preds/obj_preds/"
+              "cls_preds bekleniyor): %s" % tensor.name)
+        sys.exit(1)
+    expected = _EXPECTED_CHANNELS[role]
+    if dims[-1] != expected:
+        print("HATA: %s tensoru %d kanal olmali, %d bulundu: %s"
+              % (role, expected, dims[-1], tensor.name))
         sys.exit(1)
     if role in levels.setdefault(key, {}):
         print("HATA: ayni seviyede iki '%s' tensoru var: %s" % (role, dims))
