@@ -93,13 +93,17 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-#: --deploy'un KENDISI urettigi yan dosyalar/klasorler. Bunlar checksum'a
-#: dahil edilirse, bir --deploy denemesi bir sonrakinin checksum'ini bozar
-#: (olculdu 2026-08-13: DeployModel.py + deploy_check_data_int/ + __pycache__
-#: INT8 testinden SONRAKI bir --deploy denemesinde olustu, sonraki --deploy
-#: cagrisi "quant_artifacts_sha256 eslesmiyor" ile durdu -- calisan bir
-#: checkpoint'i INT8 testini tekrarlamaya zorlayan bir kisir donguydu).
-DEPLOY_BYPRODUCT_NAMES = {"DeployModel.py", "deploy_check_data_int", "__pycache__"}
+#: --deploy VE --inspect'in KENDILERI urettigi yan dosyalar/klasorler.
+#: Bunlar checksum'a dahil edilirse, bir deneme bir sonrakinin checksum'ini
+#: bozar (olculdu 2026-08-13: DeployModel.py + deploy_check_data_int/ +
+#: __pycache__ INT8 testinden SONRAKI bir --deploy denemesinde olustu,
+#: sonraki --deploy cagrisi "quant_artifacts_sha256 eslesmiyor" ile durdu).
+#: "inspect/" de ayni sebeple eklendi: DPU uyumluluk raporu, checkpoint'in/
+#: verinin KIMLIGINE dahil degil (--inspect komutu ne zaman/kac kez
+#: calistirilirsa calistirilsin AP sonucunu etkilemez), ama rglob() ile
+#: hash'e girip ayni kisir donguyu yaratiyordu.
+DEPLOY_BYPRODUCT_NAMES = {"DeployModel.py", "deploy_check_data_int", "__pycache__",
+                          "inspect"}
 
 
 def sha256_quant_artifacts(root):
